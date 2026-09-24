@@ -1,0 +1,273 @@
+{
+  "nickname_mode": {
+    "description": "昵称直连：注册/注销默认使用群昵称作为游戏名",
+    "type": "bool",
+    "default": true
+  },
+  "nickname_strict": {
+    "description": "严格校验昵称（必须符合 MC 用户名规则 3-16 位字母/数字/下划线）",
+    "type": "bool",
+    "default": true
+  },
+  "allow_explicit_name": {
+    "description": "允许在指令里手动指定游戏名（/注册 正 <名字>）",
+    "type": "bool",
+    "default": true
+  },
+  "default_bind_type": {
+    "description": "未指定类型时的默认绑定类型：mojang（正版）或 littleskin（皮肤站）",
+    "type": "string",
+    "default": "mojang"
+  },
+
+  "interop_enabled": {
+    "description": "启用群服互联（关闭后不与任何模组通信，只做本地绑定管理）",
+    "type": "bool",
+    "default": false
+  },
+  "mc_servers": {
+    "description": "MC 服务器列表。同主机多实例必须错开端口：实例1 7789/7790、实例2 7788/7791、实例3 7787/7792；跨主机可复用同一端口。",
+    "type": "template_list",
+    "default": [],
+    "templates": {
+      "server": {
+        "name": "MC 服务器",
+        "items": {
+          "name": {
+            "description": "服务器名称（唯一，用于 /info /status /mc 与编号对应）",
+            "type": "string",
+            "default": "生存服"
+          },
+          "ws_url": {
+            "description": "WebSocket 地址，形如 ws://127.0.0.1:7789/ws",
+            "type": "string",
+            "default": "ws://127.0.0.1:7789/ws"
+          },
+          "http_url": {
+            "description": "HTTP 地址，形如 http://127.0.0.1:7790",
+            "type": "string",
+            "default": "http://127.0.0.1:7790"
+          },
+          "token": {
+            "description": "该服 API Token（留空则使用 default_api_token）",
+            "type": "string",
+            "default": ""
+          },
+          "enabled": {
+            "description": "是否启用该服务器（禁用的服务器不参与编号）",
+            "type": "bool",
+            "default": true
+          },
+          "sync_whitelist": {
+            "description": "是否向该服同步白名单",
+            "type": "bool",
+            "default": true
+          },
+          "chat_sync": {
+            "description": "是否向该服转发 QQ 群消息",
+            "type": "bool",
+            "default": true
+          },
+          "event_broadcast": {
+            "description": "是否接收该服的玩家事件播报",
+            "type": "bool",
+            "default": true
+          }
+        }
+      }
+    }
+  },
+  "default_api_token": {
+    "description": "默认 API Token（与模组 http.token 一致；留空表示模组不校验）",
+    "type": "string",
+    "default": ""
+  },
+  "auto_reconnect": {
+    "description": "断线自动重连（1→60 秒指数退避）",
+    "type": "bool",
+    "default": true
+  },
+  "sync_version_enabled": {
+    "description": "推送白名单时携带自增版本号",
+    "type": "bool",
+    "default": true
+  },
+  "heartbeat_seconds": {
+    "description": "模组心跳周期（秒），与模组配置保持一致",
+    "type": "int",
+    "default": 30
+  },
+  "heartbeat_timeout_seconds": {
+    "description": "心跳超时（秒）。超过该时间没收到 server_status 判该服离线并标待同步，默认 3×心跳周期",
+    "type": "int",
+    "default": 90
+  },
+  "http_timeout_seconds": {
+    "description": "HTTP 请求超时（秒）",
+    "type": "int",
+    "default": 10
+  },
+  "dedup_cache_size": {
+    "description": "msg_id 去重缓存条数",
+    "type": "int",
+    "default": 512
+  },
+
+  "security_mode": {
+    "description": "消息安全模式：none（明文）/ prefix（前缀）/ encrypted（AES-128-ECB + 前缀，推荐）",
+    "type": "string",
+    "default": "encrypted"
+  },
+  "aes_key": {
+    "description": "AES 密钥。取 UTF-8 前 16 字节并补 0，等价 AES-128-ECB；必须与模组 aes_key 完全一致",
+    "type": "string",
+    "default": ""
+  },
+  "message_prefix": {
+    "description": "消息前缀（非 none 模式下缺失即拒收）",
+    "type": "string",
+    "default": "[MC]"
+  },
+
+  "enable_image_forward": {
+    "description": "QQ → MC 转发图片时附加图片链接",
+    "type": "bool",
+    "default": true
+  },
+  "enable_at_conversion": {
+    "description": "QQ → MC 转发 @ 提及时转换为 @昵称",
+    "type": "bool",
+    "default": true
+  },
+  "max_message_length": {
+    "description": "转发到 MC 的消息最大长度（超出截断）",
+    "type": "int",
+    "default": 256
+  },
+  "chat_forward_trigger": {
+    "description": "QQ→MC 转发触发前缀。留空 = 群内所有消息都转发；建议填 # 或 / 以免闲聊刷屏",
+    "type": "string",
+    "default": ""
+  },
+  "chat_sync_enabled": {
+    "description": "启用 QQ → MC 消息广播",
+    "type": "bool",
+    "default": true
+  },
+  "event_server_prefix": {
+    "description": "消息与事件播报是否携带服务器名前缀",
+    "type": "bool",
+    "default": true
+  },
+  "group_session_template": {
+    "description": "MC→QQ 主动推送的会话模板（缓存里没有真实会话时使用）。{platform} / {group_id} 为占位符",
+    "type": "string",
+    "default": "{platform}:GroupMessage:{group_id}"
+  },
+  "platform_id": {
+    "description": "平台适配器实例 ID（aiocqhttp / qq_official 等），用于拼接主动推送会话",
+    "type": "string",
+    "default": "aiocqhttp"
+  },
+
+  "group_mode": {
+    "description": "群访问控制模式：whitelist（只服务名单内群）/ blacklist（名单内群不服务）",
+    "type": "string",
+    "default": "whitelist"
+  },
+  "group_list": {
+    "description": "群号列表（留空 = 所有群都服务）",
+    "type": "list",
+    "default": []
+  },
+  "auto_unbind_on_leave": {
+    "description": "成员退群时自动解绑（依赖平台支持群成员减少通知）",
+    "type": "bool",
+    "default": false
+  },
+  "auto_cleanup_enabled": {
+    "description": "启用定时检查（每小时记录一次绑定/待同步统计，只清理会话缓存，不动绑定数据）",
+    "type": "bool",
+    "default": false
+  },
+  "initial_blacklist": {
+    "description": "初始 QQ 黑名单（首次加载时并入，之后用 /black 管理）",
+    "type": "list",
+    "default": []
+  },
+
+  "background_images": {
+    "description": "统计图片背景图。点右边的按钮直接上传 / 删除（支持多张，png/jpg/jpeg/webp），按上传顺序轮询使用；没上传时用下面的目录，目录也空则纯色底。建议尺寸 760x600 以上",
+    "type": "file",
+    "file_types": [
+      "png",
+      "jpg",
+      "jpeg",
+      "webp"
+    ],
+    "default": []
+  },
+  "background_images_dir": {
+    "description": "备用背景图目录（相对路径按插件目录解析，也可填绝对路径）。只在上面的上传列表为空时使用",
+    "type": "string",
+    "default": "data/backgrounds"
+  },
+
+  "mojang_api": {
+    "description": "Mojang API 地址（正版 UUID 查询）",
+    "type": "string",
+    "default": "https://api.mojang.com"
+  },
+  "littleskin_api": {
+    "description": "LittleSkin API 地址（皮肤站 UUID 查询）",
+    "type": "string",
+    "default": "https://littleskin.cn"
+  },
+
+  "permission_enabled": {
+    "description": "启用权限判定（关闭后所有成员都能使用全部指令）",
+    "type": "bool",
+    "default": true
+  },
+  "admin_qqs": {
+    "description": "管理员 QQ 列表（可用 /black 黑名单、/sync 手动同步、/status 互联状态等管理指令）。（群主自动拥有全部权限节点，不用在此填写）",
+    "type": "list",
+    "default": []
+  },
+  "permission_defaults": {
+    "description": "各权限节点默认是否对普通成员开放：mcwhitelist.register / mcwhitelist.stats.view / mcwhitelist.blacklist.manage / mcwhitelist.sync.trigger / mcwhitelist.interop.manage / mcwhitelist.admin.override",
+    "type": "object",
+    "items": {
+      "mcwhitelist.register": {
+        "description": "普通成员可注册/注销/迁移/定向发送",
+        "type": "bool",
+        "default": true
+      },
+      "mcwhitelist.stats.view": {
+        "description": "普通成员可查看统计",
+        "type": "bool",
+        "default": true
+      },
+      "mcwhitelist.blacklist.manage": {
+        "description": "普通成员可管理黑名单（建议关闭）",
+        "type": "bool",
+        "default": false
+      },
+      "mcwhitelist.sync.trigger": {
+        "description": "普通成员可手动同步（建议关闭）",
+        "type": "bool",
+        "default": false
+      },
+      "mcwhitelist.interop.manage": {
+        "description": "普通成员可查看群服互联状态（建议关闭）",
+        "type": "bool",
+        "default": false
+      },
+      "mcwhitelist.admin.override": {
+        "description": "超级管理员节点（建议关闭，仅配置名单）",
+        "type": "bool",
+        "default": false
+      }
+    }
+  }
+}

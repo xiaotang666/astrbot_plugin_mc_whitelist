@@ -1,0 +1,64 @@
+# 更新日志
+
+> 版本号规则（与模组同步，见 `docs/接口契约冻结_v10.3.md` §5）：
+> Bug 修复 / 小更新 `Z+1`；新增功能或字段 `Y+1`（向后兼容）；协议或配置不兼容 `X+1`（双方必须同时升级）。
+
+## v10.4.0 (2026-09-24)
+
+**新增**
+- **背景图直接在 WebUI 上传 / 删除**：新增 `file` 类型配置项 `background_images`（AstrBot 原生支持，
+  点按钮上传，支持多张、`png/jpg/jpeg/webp`，删除也在同一处），不用再进文件夹手动增删。
+  轮询顺序 = 上传顺序；没上传时回落到 `background_images_dir` 目录方式，都没有则纯色底。
+  上传的文件由内核存在 `<AstrBot 根>/data/plugin_data/astrbot_plugin_mc_whitelist/files/background_images/`。
+- 背景图解析做了健壮性处理：配置里残留的失效路径、非图片文件、路径穿越一律安静跳过（WebUI 删图后配置可能留下旧值）。
+
+**变更（配置项）**
+- 移除 `super_admin_qqs`（超级管理员 QQ 列表）：它等价于「群主」，内核里写死即可。
+  权限语义不变 —— 群主 / 群管理员自动拥有全部权限节点，`admin_qqs` 依旧可配。
+  改为在 `admin_qqs` 的描述里加括号说明「群主自动拥有全部权限节点，不用在此填写」。
+  历史配置里残留的 `super_admin_qqs` 会被忽略，不再生效。
+- 协议未变（`proto_version` 仍为 1），模组侧无需跟版本。
+
+## v10.3.1 (2026-09-24)
+
+**修复**
+- 统计图片里玩家名前的 🎮 emoji 在 msyh / 思源等中文字体下渲染成豆腐块（□）。
+  改为「色条 + 文字」，图片渲染不再依赖任何 emoji 字体（`services/stats_image.py`）。
+
+**新增**
+- `tests/test_real_kernel.py`：用 AstrBot 自带 Python 在**真实内核**（4.25.2）上做加载验证 ——
+  metadata 走真实 loader、10 条指令与全部别名注册进内核 handler 注册表、插件类可实例化、
+  `_conf_schema.json` 默认值通过 AstrBot 自己的配置校验器。
+- `tests/run_all.py`：一键跑全部测试（`--with-kernel` 追加真实内核那套）。
+- `README.md` / `CHANGELOG.md` / `requirements.txt`。
+
+**重构**
+- 版本号单一来源：新增 `core/version.py`，`main.py` / `interop/client.py` / `services/uuid.py`
+  不再各自硬编码（此前 auth 报文里的 `version` 与 UUID 查询的 `User-Agent` 会报旧版本号）。
+  真实内核测试里加了防漂移检查：除 `core/version.py` 外任何文件写死版本号即失败。
+- 真实内核测试会把 `ASTRBOT_ROOT` 重定向到临时目录 —— 内核未打包时默认拿 CWD 当根目录，
+  会在插件目录里生成 `data/cmd_config.json`、`data/t2i_templates/` 等运行时文件污染工程。
+
+## v10.3.0 (2026-09-24)
+
+**契约冻结版**（依据 `docs/接口契约冻结_v10.3.md`，插件与模组版本号绑定递增）
+
+- 外层信封统一为 `{type, seq, msg_id, proto_version, encrypted|prefix+data, timestamp}`，明文模式同样套外层。
+- `msg_id`（UUID4）+ LRU 去重落地（容量可配，默认 512）；`proto_version=1` 不一致时拒绝并停止重连。
+- `auth_result` 字段冻结为 `success / server_name / online_players / proto_version / reason`。
+- 新增 `whitelist_ack`：模组应用成功后回执，插件据此清 `pending_sync`。
+- 白名单只推全量（`action: "full"`），条目冻结为 `{name, uuid, source, qq}`，`正→MOJANG`、`皮→LITTLESKIN`。
+- 前缀校验收紧：非 `none` 模式缺失前缀即拒收。
+- `/info`、`/status` 的服务器编号 = 配置顺序且**跳过 `enabled:false`**（契约 B8）。
+- 统计字段拆为 `last_login` + `data_updated_at`；玩家无记录返回 `data:null` → 图片显示「无数据」。
+- 心跳 30s，3×（默认 90s）未收到 `server_status` 判离线并标待同步（契约 B5）。
+- 绑定读-改-写加 `asyncio.Lock`（契约 B7）；用户名唯一性判定不区分大小写（契约 B9）。
+- 权限：内核无权限节点 API 时按 `super_admin_qqs` / `admin_qqs` / 群管理员 / `permission_defaults` 降级判定。
+- 测试：mock 模组联调（`tests/mock_mod_server.py`）+ 协议/单元/互联三套自测，合计 136 项。
+
+## v10.2.0 (2026-09-24)
+
+**开发起点**（依据 `docs/开发文档_v10.2.md`）
+
+- 模块骨架：`data_manager.py`（KV 绑定与唯一性）、`interop/client.py`（每服一条 WS 长连接、认证、指数退避重连、离线补推、并发推送）、`interop/convert.py`（消息格式转换）、`core/protocol.py`（信封与加解密）、`core/crypto.py`（AES-128-ECB）、`services/uuid.py`（Mojang / LittleSkin 查询）、`services/stats_image.py`（Pillow 统计图）、`services/perm.py`（权限降级层）。
+- 指令：注册 / 注销 / 迁移 / 更新昵称 / info / black / sync / status / mc，全部带中文短别名。

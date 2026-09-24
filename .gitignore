@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+# 运行时数据（背景图、缓存、字体下载）
+data/
+fonts/
+
+# 本地测试/编辑器
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+
+# 内部开发文档（分析报告 / 冻结契约 / 模组文档）不公开上传
+docs/
