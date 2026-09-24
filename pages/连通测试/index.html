@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>连通测试</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #16181d;
+    --card: #1e2128;
+    --card-2: #242832;
+    --line: #2f3440;
+    --fg: #e8eaf0;
+    --fg-dim: #a2a9b8;
+    --fg-faint: #737b8c;
+    --accent: #4c8dff;
+    --ok: #3ecf8e;
+    --bad: #ff5f6d;
+    --warn: #f5a623;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --card-2: #f2f4f7;
+      --line: #e2e5ea;
+      --fg: #1c1f26;
+      --fg-dim: #555b69;
+      --fg-faint: #8b92a1;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 22px 32px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header { margin-bottom: 16px; }
+  h1 { margin: 0 0 6px; font-size: 20px; font-weight: 650; letter-spacing: .2px; }
+  .sub { color: var(--fg-dim); font-size: 13.5px; }
+  .bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin: 16px 0 14px;
+  }
+  button {
+    font: inherit; font-size: 14px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card-2); color: var(--fg);
+    min-height: 36px; padding: 0 16px;
+    transition: background .15s, border-color .15s, opacity .15s;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.row-btn { min-height: 32px; padding: 0 14px; font-size: 13.5px; }
+  .summary { color: var(--fg-dim); font-size: 13.5px; margin-left: auto; }
+  .list { display: flex; flex-direction: column; gap: 10px; }
+  .srv {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .srv-top { display: flex; align-items: flex-start; gap: 12px; }
+  .srv-id { min-width: 0; flex: 1; }
+  .srv-name { font-weight: 650; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .srv-url {
+    font-family: var(--mono); font-size: 12.5px; color: var(--fg-faint);
+    margin-top: 3px; word-break: break-all;
+  }
+  .tag {
+    font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--fg-dim); white-space: nowrap;
+  }
+  .tag.on { color: var(--ok); border-color: rgba(62,207,142,.4); background: rgba(62,207,142,.1); }
+  .tag.off { color: var(--fg-faint); }
+  .srv-live { font-size: 12.5px; color: var(--fg-faint); margin-top: 6px; }
+  .result { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 13.5px; }
+  .result:empty { display: none; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-weight: 600; font-size: 13px; margin-right: 8px;
+  }
+  .pill.ok { color: var(--ok); }
+  .pill.bad { color: var(--bad); }
+  .pill.run { color: var(--warn); }
+  .detail { color: var(--fg); word-break: break-word; }
+  .hint { color: var(--fg-dim); font-size: 12.5px; margin-top: 5px; }
+  .ms { color: var(--fg-faint); font-family: var(--mono); font-size: 12px; }
+  .empty {
+    background: var(--card); border: 1px dashed var(--line); border-radius: 12px;
+    padding: 26px; text-align: center; color: var(--fg-dim); font-size: 14px;
+  }
+  code { font-family: var(--mono); background: var(--card-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  footer { margin-top: 18px; color: var(--fg-faint); font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>连通测试</h1>
+    <div class="sub">逐个测试插件能否连上 MC 服务端的模组：建连 → 发认证 → 等应答。结果按阶段报因，能区分「端口不通 / 没装模组 / token 不一致 / 密钥不一致 / 协议版本不一致」。</div>
+  </header>
+
+  <div class="bar">
+    <button id="test-all" class="primary">全部测试</button>
+    <button id="reload">刷新列表</button>
+    <div class="summary" id="summary">正在读取配置…</div>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <footer>
+    测试用的是临时连接，读完即关，不影响正在运行的长连接，也不会推送白名单。<br>
+    想改地址/密钥：<code>插件配置 → mc_servers</code>。测试前会自动读取最新配置。
+  </footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var TEST_TIMEOUT_MS = 25000;
+  var bridge = null;
+  var servers = [];
+  var busy = false;
+
+  function esc(value) {
+    return String(value === null || value === undefined ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  // 内核会在 body 结束标签前注入 bridge SDK，所以这里必须等它就绪，不能同步取
+  // （注意：本文件里不要出现 body 结束标签的字面量——内核是 replace(..., 1)，
+  //   会注入到**第一个**匹配处；写在 JS 注释里会让脚本被提前截断。）
+  function waitBridge(timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var started = Date.now();
+      (function poll() {
+        if (window.AstrBotPluginPage) { resolve(window.AstrBotPluginPage); return; }
+        if (Date.now() - started > (timeoutMs || 8000)) {
+          reject(new Error("插件页面 bridge 未就绪（请从 AstrBot 的插件页面打开本页）"));
+          return;
+        }
+        setTimeout(poll, 50);
+      })();
+    });
+  }
+
+  function withTimeout(promise, ms) {
+    return Promise.race([
+      promise,
+      new Promise(function (_, reject) {
+        setTimeout(function () { reject(new Error("测试请求超时")); }, ms);
+      })
+    ]);
+  }
+
+  function setSummary(text) {
+    document.getElementById("summary").textContent = text;
+  }
+
+  function srvCard(row) {
+    var live = row.connected
+      ? (row.authenticated ? "常驻连接：已连接并已认证" : "常驻连接：已连接（未认证）")
+      : "常驻连接：未连接";
+    if (row.last_error && !row.connected) { live += " · 上次错误：" + row.last_error; }
+    return '' +
+      '<div class="srv" data-name="' + esc(row.name) + '">' +
+        '<div class="srv-top">' +
+          '<div class="srv-id">' +
+            '<div class="srv-name">' + esc(row.name) +
+              '<span class="tag ' + (row.enabled ? "on" : "off") + '">' + (row.enabled ? "已启用" : "已停用") + '</span>' +
+            '</div>' +
+            '<div class="srv-url">' + (row.ws_url ? esc(row.ws_url) : "（未配置 ws_url）") + '</div>' +
+            '<div class="srv-live">' + esc(live) + '</div>' +
+          '</div>' +
+          '<div><button class="row-btn" data-test="' + esc(row.name) + '">测试</button></div>' +
+        '</div>' +
+        '<div class="result"></div>' +
+      '</div>';
+  }
+
+  function render() {
+    var list = document.getElementById("list");
+    if (!servers.length) {
+      list.innerHTML = '<div class="empty">配置里还没有服务器。<br>去「配置 → 服务器列表（mc_servers）」添加一台，然后回来点测试。</div>';
+      return;
+    }
+    list.innerHTML = servers.map(srvCard).join("");
+  }
+
+  function rowEl(name) {
+    return document.querySelector('.srv[data-name="' + (window.CSS && CSS.escape ? CSS.escape(name) : name.replace(/"/g, '\\"')) + '"]');
+  }
+
+  function showRunning(name) {
+    var el = rowEl(name); if (!el) { return; }
+    el.querySelector(".result").innerHTML = '<span class="pill run">◌ 测试中…</span>';
+    var btn = el.querySelector("button[data-test]"); if (btn) { btn.disabled = true; }
+  }
+
+  function showResult(name, result) {
+    var el = rowEl(name); if (!el) { return; }
+    var btn = el.querySelector("button[data-test]"); if (btn) { btn.disabled = busy; }
+    var box = el.querySelector(".result");
+    if (!result) {
+      box.innerHTML = '<span class="pill bad">✕ 测试失败</span><span class="detail">接口没有返回结果</span>';
+      return;
+    }
+    var cls = result.ok ? "ok" : "bad";
+    var mark = result.ok ? "✓ 通过" : "✕ 失败";
+    var head = '<span class="pill ' + cls + '">' + mark + '</span>' +
+      '<span class="detail">[' + esc(result.stage_label || result.stage) + '] ' + esc(result.detail || "") + '</span>' +
+      '<span class="ms"> ' + (result.ms || 0) + " ms</span>";
+    var hint = result.suggestion
+      ? '<div class="hint">处理建议：' + esc(result.suggestion) + '</div>'
+      : "";
+    box.innerHTML = head + hint;
+  }
+
+  function testOne(name) {
+    showRunning(name);
+    return withTimeout(bridge.apiPost("test/" + encodeURIComponent(name), {}), TEST_TIMEOUT_MS)
+      .then(function (data) {
+        var result = data && data.results && data.results[0];
+        showResult(name, result);
+        return result;
+      })
+      .catch(function (err) {
+        showResult(name, { ok: false, stage_label: "请求", detail: String(err && err.message || err), suggestion: "" });
+        return null;
+      });
+  }
+
+  async function testAll() {
+    if (busy) { return; }
+    busy = true;
+    document.getElementById("test-all").disabled = true;
+    document.getElementById("reload").disabled = true;
+    var queue = servers.slice();
+    var done = 0, passed = 0;
+    async function worker() {
+      while (queue.length) {
+        var row = queue.shift();
+        showRunning(row.name);
+        var result = await testOne(row.name);
+        done += 1;
+        if (result && result.ok) { passed += 1; }
+        setSummary("测试中… " + done + "/" + servers.length + "（通过 " + passed + "）");
+      }
+    }
+    var workers = [];
+    for (var i = 0; i < Math.min(3, servers.length); i += 1) { workers.push(worker()); }
+    await Promise.all(workers);
+    setSummary("测试完成：" + passed + "/" + servers.length + " 通过");
+    busy = false;
+    document.getElementById("test-all").disabled = false;
+    document.getElementById("reload").disabled = false;
+    document.querySelectorAll("button[data-test]").forEach(function (b) { b.disabled = false; });
+  }
+
+  async function load() {
+    setSummary("正在读取配置…");
+    try {
+      var data = await withTimeout(bridge.apiGet("servers", {}), 15000);
+      servers = (data && data.servers) || [];
+      render();
+      var parts = ["共 " + servers.length + " 台服务器", "常驻连接 " + ((data && data.connected) || 0) + " 台在线"];
+      if (data && !data.interop_enabled) { parts.push("群服互联未启用（不影响测试）"); }
+      if (data && data.security_mode) { parts.push("模式 " + data.security_mode); }
+      setSummary(parts.join(" · "));
+    } catch (err) {
+      document.getElementById("list").innerHTML = '<div class="empty">读取配置失败：' + esc(err && err.message || err) + "</div>";
+      setSummary("读取失败");
+    }
+  }
+
+  document.getElementById("test-all").addEventListener("click", testAll);
+  document.getElementById("reload").addEventListener("click", load);
+  document.getElementById("list").addEventListener("click", function (event) {
+    var btn = event.target.closest("button[data-test]");
+    if (!btn || busy) { return; }
+    var name = btn.getAttribute("data-test");
+    btn.disabled = true;
+    testOne(name).then(function () { btn.disabled = false; });
+  });
+
+  waitBridge().then(function (api) {
+    bridge = api;
+    try { bridge.ready && bridge.ready(); } catch (e) { /* 老内核无 ready */ }
+    return load();
+  }).catch(function (err) {
+    document.getElementById("list").innerHTML = '<div class="empty">' + esc(err && err.message || err) + "</div>";
+    setSummary("bridge 未就绪");
+  });
+})();
+</script>
+</body>
+</html>

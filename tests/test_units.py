@@ -390,6 +390,199 @@ def test_schema_text() -> None:
     walk(schema)
 
 
+# ------------------------------------------------------ WS 连通性自检（插件页面「测试」按钮）
+def _conn_key(host: str = "127.0.0.1", port: int = 9999) -> Any:
+    """跨 aiohttp 版本构造 ConnectionKey（字段数随版本变过）。"""
+    from aiohttp.client_reqrep import ConnectionKey
+
+    values = {
+        "host": host,
+        "port": port,
+        "is_ssl": False,
+        "ssl": None,
+        "proxy": None,
+        "proxy_auth": None,
+        "proxy_headers_hash": None,
+        "server_hostname": None,
+    }
+    return ConnectionKey(*[values[name] for name in ConnectionKey._fields])
+
+
+def test_diagnose_units() -> None:
+    import socket
+
+    import aiohttp
+
+    from astrbot_plugin_mc_whitelist.interop.client import ServerConfig, ServerManager
+    from astrbot_plugin_mc_whitelist.services.diagnose import (
+        STAGE_LABELS,
+        WsCheck,
+        WsConnectivityTester,
+        _explain_dial_error,
+    )
+
+    C("阶段标签齐备", set(STAGE_LABELS) == {"config", "dial", "auth", "ok"})
+    payload = WsCheck(server="生存服", ok=True, stage="ok", detail="认证通过", ms=12).to_dict()
+    C(
+        "to_dict 字段齐备",
+        {
+            "server", "ok", "stage", "stage_label", "detail", "ms",
+            "suggestion", "reported_name", "reason", "close_code", "ws_url", "enabled",
+        }
+        <= set(payload),
+    )
+    C("stage_label 中文化", payload["stage_label"] == "通过")
+
+    # 建连异常必须分类成人话——这几种原因的处置方式完全不同
+    msg, hint = _explain_dial_error(aiohttp.InvalidURL("ws://a b"), "ws://a b")
+    C("地址格式错单独识别", "地址格式不对" in msg and hint, msg)
+    msg, _ = _explain_dial_error(
+        aiohttp.ClientConnectorError(_conn_key(), OSError(61, "Connection refused")),
+        "ws://127.0.0.1:1/ws",
+    )
+    C("TCP 拒连 → 提示端口/防火墙", "TCP 连不上" in msg, msg)
+    msg, _ = _explain_dial_error(
+        aiohttp.ClientConnectorError(_conn_key("no.such.host"), socket.gaierror(11001, "nope")),
+        "ws://no.such.host/ws",
+    )
+    C("域名解析失败单独识别", "域名解析失败" in msg, msg)
+    msg, hint = _explain_dial_error(
+        aiohttp.WSServerHandshakeError(None, (), status=401, message="nope"), "ws://x/ws"
+    )
+    C("握手 401 → 提示鉴权/反向代理", "401" in msg and "反向代理" in hint, f"{msg} / {hint}")
+    msg, hint = _explain_dial_error(
+        aiohttp.WSServerHandshakeError(None, (), status=404, message="nope"), "ws://x/ws"
+    )
+    C("握手 404 → 提示路径写错", "404" in msg and "路径" in hint, f"{msg} / {hint}")
+    msg, _ = _explain_dial_error(asyncio.TimeoutError(), "ws://x/ws")
+    C("超时单独识别", "超时" in msg, msg)
+    msg, _ = _explain_dial_error(RuntimeError("boom"), "ws://x/ws")
+    C("未知异常保留原始类型名", "RuntimeError" in msg, msg)
+
+    # 服务器解析 / 清单
+    manager = ServerManager(data_manager=None, plugin_version="0.0.0-test")
+    manager.configure(
+        {
+            "security_mode": "encrypted",
+            "aes_key": "test_key_16bytes",
+            "mc_servers": [
+                {"name": "生存服", "ws_url": "ws://127.0.0.1:1/ws", "http_url": "http://127.0.0.1:1"},
+                {"name": "空岛服", "ws_url": "", "enabled": False},
+                {"name": "SkyBlock", "ws_url": "ws://127.0.0.1:2/ws"},
+            ],
+        }
+    )
+    tester = WsConnectivityTester(manager)
+    C("按名字解析服务器", tester.resolve_link("生存服") is manager.links[0])
+    C("名字忽略大小写", tester.resolve_link("skyblock") is manager.links[2])
+    C("按编号解析（1 起）", tester.resolve_link("2") is manager.links[1])
+    C("不存在的名字返回 None", tester.resolve_link("没有这个服") is None)
+    rows = tester.server_rows()
+    C("server_rows 覆盖全部服务器（含已停用）", len(rows) == 3, len(rows))
+    C(
+        "server_rows 带常驻连接状态",
+        {"index", "name", "ws_url", "enabled", "connected", "authenticated", "last_error"}
+        <= set(rows[0]),
+    )
+    C("server_rows 顺序与配置一致", [row["name"] for row in rows] == ["生存服", "空岛服", "SkyBlock"])
+
+    # 纯配置层面的问题不该发网络请求
+    empty = asyncio.run(tester.test_target("2"))
+    C("没配 ws_url → config 阶段", empty.stage == "config" and empty.ok is False, empty.detail)
+    C("没配 ws_url 给人话建议", "ws_url" in empty.suggestion, empty.suggestion)
+    bad_scheme = asyncio.run(
+        tester.test_link(
+            manager.links[0].__class__(
+                manager, ServerConfig(name="协议错", ws_url="ftp://127.0.0.1:1/ws")
+            )
+        )
+    )
+    C("协议不对 → config 阶段", bad_scheme.stage == "config" and "ws://" in bad_scheme.suggestion)
+    missing = asyncio.run(tester.test_target("没有这个服"))
+    C("名字找不到 → config 阶段并说明", missing.stage == "config" and "没有找到" in missing.detail)
+
+
+# ------------------------------------------------------ 插件页面 / Web API 注册
+def test_plugin_page_and_web_api() -> None:
+    import re
+    from pathlib import Path
+
+    from astrbot_plugin_mc_whitelist.core.version import PLUGIN_VERSION
+    from astrbot_plugin_mc_whitelist.main import MCWhitelistPlugin
+
+    root = Path(__file__).resolve().parent.parent
+    page_dir = root / "pages" / "连通测试"
+    entry = page_dir / "index.html"
+    C("插件页面目录存在", page_dir.is_dir(), str(page_dir))
+    C("页面入口是 index.html", entry.is_file(), str(entry))
+    html = entry.read_text(encoding="utf-8") if entry.is_file() else ""
+    C("页面通过 bridge 调接口", "AstrBotPluginPage" in html and "apiPost" in html and "apiGet" in html)
+    C("页面 endpoint 不带插件名（内核会自动补）", 'apiPost("test/' in html, "")
+    C("页面同时有单测与全部测试按钮", "全部测试" in html and ">测试</button>" in html)
+    C("页面不引外部资源（离线也能开）", not re.search(r'(?:src|href)="https?://', html))
+    C("页面目录名是单段（内核 normalize 要求）", "/" not in page_dir.name and "\\" not in page_dir.name)
+    # 内核注入 bridge SDK 用的是 html.replace("</body>", tag + "</body>", 1)，即**第一个**
+    # 匹配处。若页面在真正的结束标签之前还有一处（哪怕在 JS 注释里），SDK 会被注进注释，
+    # 页面脚本会被提早截断成 SyntaxError —— 真机上整页报废。这条就是防它的。
+    body_closers = [m.start() for m in re.finditer(r"</body\s*>", html, re.I)]
+    C("页面里只有一个 body 结束标签", len(body_closers) == 1, f"出现 {len(body_closers)} 次")
+    if body_closers:
+        tail = html[body_closers[0] + len("</body>") :].strip()
+        C("body 结束标签就是最后一个标签（内核会往它前面注入）", tail.endswith("</html>"), tail[:60])
+        script_text = "\n".join(re.findall(r"<script>([\s\S]*?)</script>", html))
+        C("脚本里不含 body 结束标签字面量", "</body" not in script_text.lower(), "")
+
+    ctx = astrbot_stub.Context()
+    plugin = MCWhitelistPlugin(
+        ctx,
+        {
+            "mc_servers": [{"name": "生存服", "ws_url": "ws://127.0.0.1:1/ws", "token": "t"}],
+            "security_mode": "encrypted",
+            "aes_key": "test_key_16bytes",
+        },
+    )
+    C("接口前缀 = 插件名", plugin.plugin_api_prefix() == "astrbot_plugin_mc_whitelist", plugin.plugin_api_prefix())
+    specs = plugin.web_api_specs()
+    routes = [item[0] for item in specs]
+    C(
+        "路由必须带插件名前缀（内核按 /api/plug/<插件名>/<路由> 分发）",
+        all(route.startswith("/astrbot_plugin_mc_whitelist/") for route in routes),
+        str(routes),
+    )
+    C(
+        "三条接口齐备",
+        routes
+        == [
+            "/astrbot_plugin_mc_whitelist/servers",
+            "/astrbot_plugin_mc_whitelist/test/all",
+            "/astrbot_plugin_mc_whitelist/test/<path:target>",
+        ],
+        str(routes),
+    )
+    C("HTTP 方法正确", [item[2] for item in specs] == [["GET"], ["POST"], ["POST"]])
+    plugin._register_web_apis()
+    C("注册进内核注册表", len(ctx.registered_web_apis) == 3, len(ctx.registered_web_apis))
+    C("注册的是插件自己的方法", ctx.registered_web_apis[1][1].__self__ is plugin)
+    C("每项都有描述", all(item[3] for item in ctx.registered_web_apis))
+    plugin._register_web_apis()
+    C("重复注册不产生重复项（内核语义）", len(ctx.registered_web_apis) == 3, len(ctx.registered_web_apis))
+
+    served = asyncio.run(plugin.api_servers())
+    C("servers 接口 status=ok", served["status"] == "ok", served.get("message"))
+    C("servers 接口带插件版本", served["data"]["plugin_version"] == PLUGIN_VERSION)
+    C("servers 接口列出配置里的服务器", served["data"]["total"] == 1)
+    C("servers 接口带互操作开关", "interop_enabled" in served["data"])
+    C("拒绝空目标", asyncio.run(plugin.api_test_one(""))["status"] == "error")
+    # 内核 <path:...> 不解码 → 插件要把编码过的中文名解回来（不然后端会找不到这台服务器）
+    encoded = asyncio.run(plugin.api_test_one("%E7%94%9F%E5%AD%98%E6%9C%8D%E4%B8%8D%E5%AD%98%E5%9C%A8"))
+    detail = encoded["data"]["results"][0]["detail"]
+    C("路径参数里的编码名会被解码", "生存服不存在" in detail and "%" not in detail, detail)
+
+    bare = MCWhitelistPlugin(ctx, {"mc_servers": []})
+    all_result = asyncio.run(bare.api_test_all())
+    C("mc_servers 为空时给人话错误", all_result["status"] == "error" and "mc_servers" in all_result["message"])
+
+
 def main() -> int:
     test_data_manager()
     test_username_and_uuid()
@@ -399,6 +592,8 @@ def main() -> int:
     test_backgrounds()
     test_live_config()
     test_schema_text()
+    test_diagnose_units()
+    test_plugin_page_and_web_api()
     return checker.report("单元测试 test_units")
 
 

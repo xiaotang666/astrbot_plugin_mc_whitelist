@@ -20,6 +20,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = TESTS_DIR.parent
@@ -351,6 +352,96 @@ def main() -> int:
                 check.check("图标是有效方形 PNG（可被 Pillow 解析）", False, f"{type(exc).__name__}: {exc}")
     except Exception as exc:  # noqa: BLE001
         check.check("内核里能读到 logo 文件名约定", False, f"{type(exc).__name__}: {exc}")
+
+    # ------------------------------------------------- 8. 插件页面 + 页面接口路由
+    # 两件事最容易做错、且只有真实内核能验：
+    #   a) 页面目录必须能被 _discover_plugin_pages 发现（入口文件固定 index.html）
+    #   b) 注册的路由必须带插件名前缀 —— 前端 bridge 拼的是 /api/plug/<插件名>/<路由>
+    try:
+        from astrbot.dashboard.routes.plugin import (
+            _PLUGIN_PAGE_ENTRY_FILE_NAME,
+            PluginRoute,
+        )
+
+        check.equal("内核页面入口文件名", _PLUGIN_PAGE_ENTRY_FILE_NAME, "index.html")
+        pages_root = PLUGIN_DIR / "pages"
+        discovered: list[str] = []
+        if pages_root.is_dir():
+            for page_dir in sorted(pages_root.iterdir(), key=lambda p: p.name.lower()):
+                if not page_dir.is_dir():
+                    continue
+                try:
+                    name = PluginRoute._normalize_plugin_page_name(page_dir.name)
+                except ValueError:
+                    continue
+                if (page_dir / _PLUGIN_PAGE_ENTRY_FILE_NAME).is_file():
+                    discovered.append(name)
+        check.equal("内核能发现本插件的页面", discovered, ["连通测试"])
+    except Exception as exc:  # noqa: BLE001
+        check.check("内核能发现本插件的页面", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        from astrbot.core.star.context import Context
+        from astrbot.dashboard.server import _match_registered_web_api
+
+        probe = plugin_cls(_StubContext(), dict(raw_meta))  # type: ignore[name-defined]
+        prefix = probe.plugin_api_prefix()
+        check.check(
+            "接口前缀 = 内核认的插件名",
+            prefix == meta.name,
+            f"前缀 {prefix!r} / 插件名 {meta.name!r}",
+        )
+
+        real_ctx = Context.__new__(Context)  # registered_web_apis 是类属性，借用真实注册逻辑
+        saved = list(Context.registered_web_apis)
+        Context.registered_web_apis[:] = []
+        try:
+            probe.context = real_ctx  # 让插件把接口注册到「真实 Context」上
+            probe._register_web_apis()
+            apis = list(Context.registered_web_apis)
+            check.equal("向真实 Context 注册了三条路由", len(apis), 3)
+            check.check(
+                "路由都带插件名前缀",
+                all(route.startswith(f"/{meta.name}/") for route, *_ in apis),
+                str([route for route, *_ in apis]),
+            )
+
+            plugin_name = meta.name
+            for method, path, expect_handler in (
+                ("POST", f"/api/plug/{plugin_name}/test/all", "api_test_all"),
+                ("POST", f"/api/plug/{plugin_name}/test/{quote('生存服')}", "api_test_one"),
+                ("GET", f"/api/plug/{plugin_name}/servers", "api_servers"),
+            ):
+                subpath = path[len("/api/plug/") :]
+                matched = _match_registered_web_api(apis, subpath, method)
+                ok = matched is not None
+                check.check(f"前端 URL 能命中路由（{method} {path}）", ok, "未匹配到任何注册路由")
+                if ok:
+                    handler, values = matched
+                    check.equal(
+                        f"命中正确的处理函数（{expect_handler}）",
+                        getattr(handler, "__name__", ""),
+                        expect_handler,
+                    )
+                    if expect_handler == "api_test_one":
+                        # 内核的 <path:...> 不解码（实测），所以插件侧要自己 unquote；
+                        # 这条同时证明「页面传编码名也能被正确解析」。
+                        check.equal(
+                            "路径参数解出服务器名（解码后）",
+                            unquote(str(values.get("target"))),
+                            "生存服",
+                        )
+
+            # 反向验证：不带插件名前缀的旧写法必然匹配不上（这就是必须带前缀的原因）
+            check.check(
+                "不带插件名前缀的路由匹配不上",
+                _match_registered_web_api(apis, "test/all", "POST") is None,
+                "",
+            )
+        finally:
+            Context.registered_web_apis[:] = saved
+    except Exception as exc:  # noqa: BLE001
+        check.check("插件页面接口可在真实内核上匹配", False, f"{type(exc).__name__}: {exc}")
 
     return check.report("真实内核：加载与注册")
 

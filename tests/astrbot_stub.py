@@ -101,6 +101,7 @@ class Context:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, Any]] = []
+        self.registered_web_apis: list[tuple[str, Any, list[str], str]] = []
 
     async def send_message(self, session: str, message_chain: Any) -> bool:
         self.sent.append((session, message_chain))
@@ -108,6 +109,20 @@ class Context:
 
     def get_config(self, umo: str | None = None) -> Any:
         return AstrBotConfig()
+
+    def register_web_api(
+        self,
+        route: str,
+        view_handler: Any,
+        methods: list[str],
+        desc: str,
+    ) -> None:
+        """与内核 core/star/context.py 同语义：同路由 + 同方法则替换。"""
+        for idx, api in enumerate(self.registered_web_apis):
+            if api[0] == route and methods == api[2]:
+                self.registered_web_apis[idx] = (route, view_handler, methods, desc)
+                return
+        self.registered_web_apis.append((route, view_handler, methods, desc))
 
 
 def register(name: str, display_name: str = "", desc: str = "", version: str = ""):

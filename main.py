@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -45,11 +46,12 @@ except Exception:  # pragma: no cover - 测试/老内核环境
         """占位：老内核没有 GreedyStr，退化为普通字符串参数。"""
 
 
-from .core.protocol import PROTO_VERSION
+from .core.protocol import PROTO_VERSION, now_iso
 from .core.version import PLUGIN_VERSION
 from .data_manager import DataManager
 from .interop.client import InteropHooks, ServerLink, ServerManager
 from .interop.convert import message_to_text
+from .services.diagnose import WsConnectivityTester
 from .services.perm import (
     NODE_BLACKLIST,
     NODE_INTEROP,
@@ -141,6 +143,8 @@ class MCWhitelistPlugin(Star):
         self._sessions: dict[str, str] = {}
         self._cleanup_task: asyncio.Task | None = None
         self._last_seen_umo: str | None = None
+        # WS 连通性自检（插件页面上的「测试」按钮用）
+        self.diagnose = WsConnectivityTester(self.manager)
 
     # ------------------------------------------------------------- 生命周期
     async def initialize(self) -> None:
@@ -150,6 +154,7 @@ class MCWhitelistPlugin(Star):
             await self.data_manager.merge_initial_blacklist(initial)
         self.manager.configure(self._config)
         self.perm.reload(self._config)
+        self._register_web_apis()
         if _as_bool(self._config.get("interop_enabled"), False):
             await self.manager.start()
             logger.info(
@@ -198,6 +203,109 @@ class MCWhitelistPlugin(Star):
         except Exception:  # noqa: BLE001 - 测试/旧内核环境
             pass
         return self._config
+
+    # ------------------------------------------------------------- 插件页面接口
+    # 内核分发规则：插件页面里的 bridge 把接口地址拼成 /api/plug/<插件名>/<路由>，
+    # 而 dashboard 的服务端是拿「整个 subpath」（含插件名）去比对注册表的，
+    # 所以这里注册的路由**必须带自己的插件名前缀**，否则永远匹配不上。
+    def plugin_api_prefix(self) -> str:
+        """取 dashboard 眼里的插件名（= metadata.yaml 的 name）。"""
+        try:
+            from astrbot.core.star.star import star_map
+
+            metadata = star_map.get(type(self).__module__)
+            name = str(getattr(metadata, "name", "") or "").strip()
+            if name:
+                return name
+        except Exception:  # noqa: BLE001 - 测试/旧内核环境
+            pass
+        return str(type(self).__module__).split(".")[0] or "astrbot_plugin_mc_whitelist"
+
+    def web_api_specs(self) -> list[tuple[str, str, list[str], str]]:
+        """(路由, 处理方法名, HTTP 方法, 描述)。"""
+        prefix = self.plugin_api_prefix()
+        return [
+            (f"/{prefix}/servers", "api_servers", ["GET"], "读取 mc_servers 列表"),
+            (f"/{prefix}/test/all", "api_test_all", ["POST"], "测试全部服务器的 WS 连通性"),
+            (
+                f"/{prefix}/test/<path:target>",
+                "api_test_one",
+                ["POST"],
+                "测试单个服务器的 WS 连通性",
+            ),
+        ]
+
+    def _register_web_apis(self) -> None:
+        context = getattr(self, "context", None)
+        register = getattr(context, "register_web_api", None)
+        if not callable(register):
+            logger.debug("[MCWL] 内核不支持 register_web_api，跳过插件页面接口")
+            return
+        for route, handler_name, methods, desc in self.web_api_specs():
+            register(route, getattr(self, handler_name), methods, desc)
+
+    @staticmethod
+    def _api_ok(data: Any) -> dict[str, Any]:
+        # 与内核 dashboard 的 Response 同构：页面 bridge 只认 status/data
+        return {"status": "ok", "message": None, "data": data}
+
+    @staticmethod
+    def _api_error(message: str) -> dict[str, Any]:
+        return {"status": "error", "message": message, "data": None}
+
+    def _refresh_links(self) -> None:
+        """按当前配置刷新连接对象：改完 mc_servers 不重载插件也能测到新地址。"""
+        self.manager.configure(self.live_config())
+
+    async def api_servers(self) -> dict[str, Any]:
+        """插件页面加载时拉服务器清单（含常驻连接当前状态，便于对照）。"""
+        self._refresh_links()
+        config = self.live_config()
+        servers = self.diagnose.server_rows()
+        return self._api_ok(
+            {
+                "plugin_version": PLUGIN_VERSION,
+                "interop_enabled": _as_bool(config.get("interop_enabled"), False),
+                "security_mode": str(config.get("security_mode") or "encrypted"),
+                "generated_at": now_iso(),
+                "servers": servers,
+                "total": len(servers),
+                "connected": sum(1 for row in servers if row["connected"]),
+            }
+        )
+
+    async def api_test_all(self) -> dict[str, Any]:
+        self._refresh_links()
+        if not self.manager.links:
+            return self._api_error("mc_servers 里没有任何服务器，先在插件配置里添加")
+        checks = await self.diagnose.test_all()
+        results = [check.to_dict() for check in checks]
+        return self._api_ok(
+            {
+                "results": results,
+                "total": len(results),
+                "passed": sum(1 for item in results if item["ok"]),
+                "generated_at": now_iso(),
+            }
+        )
+
+    async def api_test_one(self, target: str = "", **kwargs: Any) -> dict[str, Any]:
+        # 内核的 <path:...> 转换器不会解百分号编码（实测 werkzeug），页面对中文名做了
+        # encodeURIComponent，所以这里容错再解一次；解不动就按原样走，不会更糟。
+        raw = str(target or kwargs.get("target") or "").strip()
+        target = unquote(raw).strip() or raw
+        if not target:
+            return self._api_error("缺少要测试的服务器名")
+        self._refresh_links()
+        check = await self.diagnose.test_target(target)
+        return self._api_ok(
+            {
+                "results": [check.to_dict()],
+                "total": 1,
+                "passed": 1 if check.ok else 0,
+                "generated_at": now_iso(),
+            }
+        )
 
     async def _get_uuid_session(self):
         import aiohttp

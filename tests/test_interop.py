@@ -383,11 +383,195 @@ async def scenario_plain_mode() -> None:
         await mock.stop()
 
 
+def _closed_port() -> int:
+    """占一个端口再放掉 —— 基本可以认为是没人监听。"""
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = int(sock.getsockname()[1])
+    sock.close()
+    return port
+
+
+async def scenario_connectivity_test() -> None:
+    """WS 连通性自检（插件页面的「测试」按钮）：每条失败分支都要能区分出原因。"""
+    from aiohttp import web
+
+    from astrbot_plugin_mc_whitelist.core.protocol import MsgType
+    from astrbot_plugin_mc_whitelist.services.diagnose import WsConnectivityTester
+
+    dm = DataManager(FakeKV())
+    await seed_bindings(dm)
+
+    # ---------------------------------------------------------- 1) 正常模组
+    mock = MockModServer(token=TOKEN, heartbeat=5.0)
+    await mock.start()
+    manager = make_manager(
+        dm, [{"name": "生存服", "ws_url": mock.ws_url, "http_url": mock.http_url, "token": TOKEN}]
+    )
+    tester = WsConnectivityTester(manager)
+    try:
+        check = await tester.test_target("生存服")
+        C("正常模组：自检通过", check.ok and check.stage == "ok", f"{check.stage} / {check.detail}")
+        C("报出模组自称的服务器名", check.reported_name == "生存服", str(check.reported_name))
+        C("记录耗时（毫秒）", check.ms >= 0, check.ms)
+        C("结果能序列化成 JSON（接口要回给页面）", isinstance(json.dumps(check.to_dict(), ensure_ascii=False), str))
+        C("未启动长连接时状态是「未连接」", tester.server_rows()[0]["connected"] is False)
+
+        # 常驻长连接与自检并存：自检不许打扰它
+        await manager.start()
+        link = manager.enabled_links()[0]
+        C("常驻链路先认证成功", await wait_for(lambda: link.authenticated))
+        pushes_before = len(mock.whitelist_updates)
+        connects_before = mock.ws_connects
+        live = await tester.test_target("生存服")
+        C("长连接在跑时自检照样通过", live.ok, live.detail)
+        C("自检另开一条连接（模组看到两条）", mock.ws_connects == connects_before + 1, mock.ws_connects)
+        C("自检不影响常驻链路", bool(link.connected and link.authenticated))
+        C("自检不推白名单", len(mock.whitelist_updates) == pushes_before, len(mock.whitelist_updates))
+        C("server_rows 跟着反映已连接", tester.server_rows()[0]["connected"] is True)
+        await manager.stop()
+
+        # ------------------------------------------------------ 2) token 不一致
+        wrong = make_manager(
+            dm,
+            [{"name": "生存服", "ws_url": mock.ws_url, "http_url": mock.http_url, "token": "wrong-token"}],
+        )
+        check = await WsConnectivityTester(wrong).test_target("生存服")
+        C("token 不一致 → 认证阶段失败", not check.ok and check.stage == "auth", f"{check.stage} / {check.detail}")
+        C("原因写明是 token 问题", "token" in check.detail, check.detail)
+        C("建议是改 token", "token" in check.suggestion, check.suggestion)
+
+        # ------------------------------------------------------ 3) 协议版本不一致
+        mismatched = MockModServer(token=TOKEN, protocol_mismatch=True, heartbeat=5.0)
+        await mismatched.start()
+        try:
+            bad_proto = make_manager(
+                dm,
+                [{"name": "旧协议服", "ws_url": mismatched.ws_url, "http_url": mismatched.http_url, "token": TOKEN}],
+            )
+            check = await WsConnectivityTester(bad_proto).test_target("旧协议服")
+            C("协议不一致 → 认证被拒并带 reason", (not check.ok) and check.reason == "protocol_mismatch", str(check.reason))
+            C("建议是双方一起升级", "升级" in check.suggestion, check.suggestion)
+        finally:
+            await mismatched.stop()
+
+        # ------------------------------------- 4) 摸到 TCP，但一个字都不回（没装模组）
+        quiet = MockModServer(token=TOKEN, silent=True, heartbeat=5.0)
+        await quiet.start()
+        try:
+            silent_manager = make_manager(
+                dm, [{"name": "安静服", "ws_url": quiet.ws_url, "http_url": quiet.http_url, "token": TOKEN}]
+            )
+            check = await WsConnectivityTester(silent_manager).test_target("安静服", timeout=1.5)
+            C(
+                "没应答 → 单独一类原因（不是笼统的连接失败）",
+                (not check.ok) and check.stage == "auth" and "没收到认证应答" in check.detail,
+                check.detail,
+            )
+            C("建议列出三种可能（没装 / 地址错 / 信封不一致）",
+              "没装" in check.suggestion and "prefix" in check.suggestion, check.suggestion)
+            C("模组确实收到了我们的认证包", quiet.auth_count == 0 and len(quiet.received) >= 1, quiet.received[:1])
+        finally:
+            await quiet.stop()
+
+        # ------------------------------------- 5) 前缀不一致：模组静默丢弃我们的包
+        prefixed = MockModServer(token=TOKEN, prefix="[XX]", heartbeat=5.0)
+        await prefixed.start()
+        try:
+            prefix_manager = make_manager(
+                dm, [{"name": "前缀服", "ws_url": prefixed.ws_url, "http_url": prefixed.http_url, "token": TOKEN}]
+            )
+            check = await WsConnectivityTester(prefix_manager).test_target("前缀服", timeout=1.5)
+            C("前缀不一致：模组侧确实拒收了", bool(prefixed.rejected), str(prefixed.rejected[:1]))
+            C("插件侧表现为「没应答」且已提示信封不一致",
+              (not check.ok) and "prefix" in check.suggestion, check.suggestion)
+        finally:
+            await prefixed.stop()
+
+        # ------------------------------------------------------ 6) 端口不通
+        dead = make_manager(
+            dm,
+            [{"name": "死服", "ws_url": f"ws://127.0.0.1:{_closed_port()}/ws", "http_url": ""}],
+        )
+        check = await WsConnectivityTester(dead).test_target("死服", timeout=3.0)
+        C("端口不通 → 建连阶段失败", (not check.ok) and check.stage == "dial", f"{check.stage} / {check.detail}")
+        C("提示 TCP 连不上（端口/防火墙）", "TCP 连不上" in check.detail, check.detail)
+
+        # ------------------------------- 7) 对面回了包但信封对不上（协议版本不同）
+        rotten = Envelope(crypto=AESCrypto(AES_KEY), prefix="[MC]", proto_version=99)
+
+        async def rotten_handler(request: Any) -> Any:
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            async for message in ws:
+                if message.type == web.WSMsgType.TEXT:
+                    await ws.send_str(
+                        rotten.encode(MsgType.AUTH_RESULT, {"success": True, "server_name": "怪信封服"})
+                    )
+                    break
+            await ws.close()
+            return ws
+
+        app = web.Application()
+        app.router.add_get("/ws", rotten_handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = int(site._server.sockets[0].getsockname()[1])
+        try:
+            weird = make_manager(
+                dm, [{"name": "怪信封服", "ws_url": f"ws://127.0.0.1:{port}/ws", "http_url": ""}]
+            )
+            check = await WsConnectivityTester(weird).test_target("怪信封服", timeout=3.0)
+            C("应答解不开 → 报「被拒收」而不是超时", (not check.ok) and "拒收" in check.detail, check.detail)
+            C("提示信封三件套（prefix/aes_key/proto_version）",
+              "prefix" in check.suggestion and "aes_key" in check.suggestion, check.suggestion)
+        finally:
+            await runner.cleanup()
+
+        # ---------------------------------------- 8) 认证过程中被服务端踢掉连接
+        async def closing_handler(request: Any) -> Any:
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            await asyncio.sleep(0.3)  # 让插件先把认证包发出来
+            await ws.close(code=1001, message=b"bye")
+            return ws
+
+        app2 = web.Application()
+        app2.router.add_get("/ws", closing_handler)
+        runner2 = web.AppRunner(app2)
+        await runner2.setup()
+        site2 = web.TCPSite(runner2, "127.0.0.1", 0)
+        await site2.start()
+        port2 = int(site2._server.sockets[0].getsockname()[1])
+        try:
+            kicked = make_manager(
+                dm, [{"name": "踢人服", "ws_url": f"ws://127.0.0.1:{port2}/ws", "http_url": ""}]
+            )
+            check = await WsConnectivityTester(kicked).test_target("踢人服", timeout=4.0)
+            C("被服务端断开 → 单独报因",
+              (not check.ok) and ("关闭" in check.detail or "发送认证消息失败" in check.detail), check.detail)
+        finally:
+            await runner2.cleanup()
+
+        # ---------------------------------------- 9) 全部测试：每台一行结果
+        results = await WsConnectivityTester(manager).test_all(timeout=3.0)
+        C("test_all 覆盖每台服务器", len(results) == len(manager.links), len(results))
+        C("test_all 结果可序列化", all(isinstance(item.to_dict(), dict) for item in results))
+    finally:
+        await manager.stop()
+        await mock.stop()
+
+
 def main() -> int:
     asyncio.run(scenario_handshake_and_push())
     asyncio.run(scenario_auth_failures())
     asyncio.run(scenario_http_only_and_disabled())
     asyncio.run(scenario_plain_mode())
+    asyncio.run(scenario_connectivity_test())
     return checker.report("联调测试 test_interop")
 
 

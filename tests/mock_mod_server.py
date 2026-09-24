@@ -56,11 +56,13 @@ class MockModServer:
         online_players: int = 3,
         max_players: int = 20,
         tps: float = 19.8,
+        silent: bool = False,
     ) -> None:
         self.server_name = server_name
         self.security_mode = security_mode
         self.prefix = prefix
         self.token = token
+        self.silent = silent
         self.heartbeat = heartbeat
         self.protocol_mismatch = protocol_mismatch
         self.auth_deny = auth_deny
@@ -164,6 +166,10 @@ class MockModServer:
             return
         data = dict(message.data or {})
         self.received.append({"type": message.type, "data": data, "msg_id": message.msg_id})
+
+        if self.silent:
+            # 模拟「模组没装 / 配置不一致静默丢包」：收到了但一个字都不回
+            return
 
         if message.type == MsgType.AUTH:
             self.auth_count += 1
