@@ -1,6 +1,6 @@
 """多服务器连接管理：每服一条 WebSocket 长连接 + 独立 HTTP 客户端。
 
-契约依据：docs/接口契约冻结_v10.3.md
+契约依据：docs/接口契约冻结_v0.3.md
     §1.1 模组 = 服务端（WS Server + HTTP Server），插件 = 客户端
     §1.2 外层信封统一带 type/seq/msg_id/proto_version；前缀必填；msg_id 去重
     §1.3 HTTP 用 Authorization: Bearer <token>，统一响应 {code,message,data,timestamp}

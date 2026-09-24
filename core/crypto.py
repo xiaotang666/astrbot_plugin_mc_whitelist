@@ -1,6 +1,6 @@
 """AES-128-ECB 加解密 —— 与模组端 Java 实现逐字节等价。
 
-契约（docs/接口契约冻结_v10.3.md §1.2 规则 5）：
+契约（docs/接口契约冻结_v0.3.md §1.2 规则 5）：
     key  = aes_key 的 UTF-8 字节取前 16、不足补 0x00
     算法 = AES-128-ECB + PKCS7（Java 侧 PKCS5Padding 对 AES 等价）+ Base64
 

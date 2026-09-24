@@ -1,6 +1,6 @@
 """QQ 消息 → 文本（供 QQ→MC 转发使用）。安全：任何组件都不会抛异常。
 
-文档依据：docs/开发文档_v10.3.md §十一 消息格式转换、§14 enable_image_forward /
+文档依据：docs/开发文档_v0.3.md §十一 消息格式转换、§14 enable_image_forward /
 enable_at_conversion / max_message_length。
 """
 

@@ -1,4 +1,4 @@
-"""Mock 模组（按 docs/接口契约冻结_v10.3.md 实现服务端行为）。
+"""Mock 模组（按 docs/接口契约冻结_v0.3.md 实现服务端行为）。
 
 用途：插件侧联调/回归——不依赖真实的 NeoForge 模组即可验证：
     · 握手与认证（auth / auth_result，含 proto_version 校验）

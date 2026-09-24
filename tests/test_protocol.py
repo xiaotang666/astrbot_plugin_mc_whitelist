@@ -59,7 +59,7 @@ check("短密钥补0", AESCrypto("abc").key_bytes == b"abc" + b"\x00" * 13, AESC
 check("中文密钥按UTF-8截断", AESCrypto("密钥密钥密钥密钥密钥密钥密钥密钥密钥").key_bytes == "密钥密钥密钥密钥密钥密钥密钥密钥密钥".encode()[:16])
 
 # ---------------------------------------------------------------- 2. openssl 交叉验证
-PLAIN = "你好 MC v10.3 — chat payload"
+PLAIN = "你好 MC v0.3 — chat payload"
 b64 = c.encrypt(PLAIN)
 try:
     out = subprocess.run(

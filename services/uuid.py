@@ -1,6 +1,6 @@
 """游戏名 → UUID 查询（Mojang / LittleSkin 双源）+ 名称规范化与校验。
 
-契约依据：docs/接口契约冻结_v10.3.md §3.1
+契约依据：docs/接口契约冻结_v0.3.md §3.1
     source: 正 → "MOJANG"，皮 → "LITTLESKIN"（模组端直接使用该值）
 
 D2 决策：本版只服务正版验证服务器（online-mode=true，含 authlib-injector + 皮肤站），

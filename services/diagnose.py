@@ -9,7 +9,7 @@
       端口不通、没装模组、token 不一致、密钥不一致、协议版本不一致，
       这几种原因的处置方式完全不同，不能糊成一句「连接失败」。
 
-依赖契约：docs/接口契约冻结_v10.3.md §1.1（模组 = WS Server）/§1.2（信封）/§2（auth、auth_result）
+依赖契约：docs/接口契约冻结_v0.3.md §1.1（模组 = WS Server）/§1.2（信封）/§2（auth、auth_result）
 """
 
 from __future__ import annotations

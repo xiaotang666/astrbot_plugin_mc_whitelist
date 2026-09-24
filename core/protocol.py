@@ -1,4 +1,4 @@
-"""消息信封与类型 —— 严格实现 docs/接口契约冻结_v10.3.md §1.2 / §2。
+"""消息信封与类型 —— 严格实现 docs/接口契约冻结_v0.3.md §1.2 / §2。
 
 信封（加密模式）:
     {"type","seq","msg_id","proto_version","encrypted","timestamp"}
