@@ -50,12 +50,33 @@ REGISTERED: dict[str, Any] = {"commands": [], "handlers": [], "stars": []}
 
 
 class logger:
-    """astrbot.api.logger 的替身。"""
+    """astrbot.api.logger 的替身。
+
+    真实内核导出的是 Logger 实例；这里以类形式导出，因此显式补上
+    debug/info/warning/error 四个类方法——否则 `logger.warning(...)`
+    这类调用在单测里会 AttributeError（类属性查找不走 __getattr__）。
+    """
 
     _log = logging.getLogger("astrbot.stub")
 
     def __getattr__(self, item: str):  # pragma: no cover
         return getattr(self._log, item)
+
+    @classmethod
+    def debug(cls, *args: Any, **kwargs: Any) -> None:
+        cls._log.debug(*args, **kwargs)
+
+    @classmethod
+    def info(cls, *args: Any, **kwargs: Any) -> None:
+        cls._log.info(*args, **kwargs)
+
+    @classmethod
+    def warning(cls, *args: Any, **kwargs: Any) -> None:
+        cls._log.warning(*args, **kwargs)
+
+    @classmethod
+    def error(cls, *args: Any, **kwargs: Any) -> None:
+        cls._log.error(*args, **kwargs)
 
 
 class AstrBotConfig(dict):

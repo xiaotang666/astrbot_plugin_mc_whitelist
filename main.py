@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -143,6 +144,8 @@ class MCWhitelistPlugin(Star):
         self._sessions: dict[str, str] = {}
         self._cleanup_task: asyncio.Task | None = None
         self._last_seen_umo: str | None = None
+        # 同一条「未转发原因」最多每 60 秒提示一次：既不刷屏，又不让失败消失得无声无息
+        self._throttle_at: dict[str, float] = {}
         # WS 连通性自检（插件页面上的「测试」按钮用）
         self.diagnose = WsConnectivityTester(self.manager)
 
@@ -904,6 +907,48 @@ class MCWhitelistPlugin(Star):
         yield event.plain_result(HELP_TEXT.format(version=PLUGIN_VERSION))
 
     # ------------------------------------------------------------- QQ → MC 转发
+    def _log_throttled(
+        self, key: str, message: str, *, level: str = "warning", interval: float = 60.0
+    ) -> None:
+        """同一原因每 interval 秒最多提示一次。
+
+        转发失败必须可见（以前是静默丢弃，群里没反应、日志里也查不到），
+        但群消息是高频事件，不能每条都刷屏。
+        """
+        now = time.time()
+        if now - self._throttle_at.get(key, 0.0) < interval:
+            return
+        self._throttle_at[key] = now
+        getattr(logger, level, logger.warning)(message)
+
+    def _chat_forward_block(self, event: AstrMessageEvent) -> tuple[str, str] | None:
+        """这条群消息能不能转发。返回 None = 可以；否则 (原因代码, 原因说明)。
+
+        抽成独立方法是为了让「为什么没转发」可单测、可日志——
+        原先每个条件都是静默 return，用户只能看到「群里没反应」。
+        """
+        if not _as_bool(self.cfg("interop_enabled"), False):
+            return "interop_off", "群服互联未启用（配置页打开「启用群服互联」并重载插件）"
+        if not _as_bool(self.cfg("chat_sync_enabled"), True):
+            return "chat_sync_off", "「启用 QQ→MC 广播」是关的（配置页打开后保存即可，无需重载）"
+        try:
+            if event.is_wake_up():
+                return "wake_up", ""
+        except Exception:  # noqa: BLE001
+            pass
+        group_id = _safe_group_id(event)
+        qq = _safe_sender_id(event)
+        if not self._group_allowed(group_id, qq):
+            return "group_denied", f"群 {group_id} 不在允许范围（group_mode / group_list）"
+        if self.data_manager.is_blacklisted(qq):
+            return "blacklisted", f"QQ {qq} 在黑名单里"
+        if not [link for link in self.manager.enabled_links() if link.cfg.chat_sync]:
+            return "no_target", (
+                "没有可转发的服务器：需要同时满足「启用群服互联」「该服务器已启用」"
+                "「该服务器开启「转发群消息」」"
+            )
+        return None
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
         """群消息转发到 MC（文档 §10.2 + 契约 P1：chat_forward_trigger 触发词）。
@@ -912,22 +957,12 @@ class MCWhitelistPlugin(Star):
         带唤醒前缀（指令）的消息不转发。
         """
         self._remember_session(event)
-        if not _as_bool(self.cfg("interop_enabled"), False):
-            return
-        if not _as_bool(self.cfg("chat_sync_enabled"), True):
-            return
-        try:
-            if event.is_wake_up():
-                return
-        except Exception:  # noqa: BLE001
-            pass
-        group_id = _safe_group_id(event)
-        qq = _safe_sender_id(event)
-        if not self._group_allowed(group_id, qq):
-            return
-        if self.data_manager.is_blacklisted(qq):
-            return
-        if not self.manager.enabled_links():
+        block = self._chat_forward_block(event)
+        if block is not None:
+            code, reason = block
+            # 指令消息（唤醒词）属正常跳过，不提示；其余原因要让用户看得见
+            if reason:
+                self._log_throttled(f"chat-skip:{code}", f"[MCWL] 群消息未转发：{reason}")
             return
 
         text = message_to_text(
@@ -939,12 +974,23 @@ class MCWhitelistPlugin(Star):
         trigger = str(self.cfg("chat_forward_trigger") or "")
         if trigger:
             if not text.startswith(trigger):
-                return
+                return  # 触发词不匹配 = 设计如此，不提示
             text = text[len(trigger):].strip()
         if not text:
             return
-        sender = _safe_sender_name(event) or f"QQ{qq}"
-        await self.manager.broadcast_chat(sender, text)
+        sender = _safe_sender_name(event) or f"QQ{_safe_sender_id(event)}"
+        results = await self.manager.broadcast_chat(sender, text)
+        failed = [name for name, ok in results.items() if not ok]
+        if failed:
+            self._log_throttled(
+                "chat-fail:" + ",".join(sorted(failed)),
+                f"[MCWL] 群消息转发失败（{', '.join(failed)} 未连接，这条消息已丢弃）："
+                "用 /status 或插件页面「连通测试」查看链路状态",
+            )
+        elif results:
+            logger.info(
+                f"[MCWL] 群消息已转发到 {', '.join(results)}（{sender}，{len(text)} 字）"
+            )
 
     @filter.event_message_type(EventMessageType.OTHER_MESSAGE)
     async def on_notice_message(self, event: AstrMessageEvent):

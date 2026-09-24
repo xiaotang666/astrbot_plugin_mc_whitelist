@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from typing import Any
 
@@ -583,6 +584,84 @@ def test_plugin_page_and_web_api() -> None:
     C("mc_servers 为空时给人话错误", all_result["status"] == "error" and "mc_servers" in all_result["message"])
 
 
+def test_chat_forward_diagnostics() -> None:
+    """QQ → MC 转发：每种「没转发」都要说得出原因（修复静默丢弃、查不出问题）。"""
+    from astrbot_plugin_mc_whitelist.main import MCWhitelistPlugin
+
+    base: dict[str, Any] = {
+        "mc_servers": [{"name": "生存服", "ws_url": "ws://127.0.0.1:1/ws", "token": "t"}],
+        "security_mode": "none",
+        "interop_enabled": True,
+    }
+
+    def make(**over: Any) -> Any:
+        cfg = dict(base)
+        cfg.update(over)
+        plugin = MCWhitelistPlugin(astrbot_stub.Context(), cfg)
+        plugin._refresh_links()  # 与 api_servers 同路径：按实时配置刷新链路
+        return plugin
+
+    def ev(**over: Any) -> Any:
+        return astrbot_stub.AstrMessageEvent(**over)
+
+    C("条件齐备时可转发", make()._chat_forward_block(ev(message_str="hello")) is None)
+
+    r = make(interop_enabled=False)._chat_forward_block(ev())
+    C("群服互联未启用 → 报因 interop_off", r is not None and r[0] == "interop_off", str(r))
+    C("原因里点名该开的开关", r is not None and "启用群服互联" in r[1], str(r))
+
+    r = make(chat_sync_enabled=False)._chat_forward_block(ev())
+    C("QQ→MC 广播关闭 → 报因 chat_sync_off", r is not None and r[0] == "chat_sync_off", str(r))
+
+    C(
+        "指令（唤醒）消息静默跳过、不打扰用户",
+        make()._chat_forward_block(ev(wake=True)) == ("wake_up", ""),
+    )
+
+    r = make(group_list=["12345"])._chat_forward_block(ev(group_id="88888"))
+    C("群不在允许列表 → 报因 group_denied", r is not None and r[0] == "group_denied", str(r))
+
+    black = make()
+    asyncio.run(black.data_manager.add_blacklist("10001"))
+    r = black._chat_forward_block(ev(sender_id="10001"))
+    C("黑名单用户 → 报因 blacklisted", r is not None and r[0] == "blacklisted", str(r))
+
+    r = make(
+        mc_servers=[{"name": "生存服", "ws_url": "ws://127.0.0.1:1/ws", "chat_sync": False}]
+    )._chat_forward_block(ev())
+    C("服务器关了「转发群消息」→ 报因 no_target", r is not None and r[0] == "no_target", str(r))
+
+    r = make(
+        mc_servers=[{"name": "生存服", "ws_url": "ws://127.0.0.1:1/ws", "enabled": False}]
+    )._chat_forward_block(ev())
+    C("服务器条目被禁用 → 报因 no_target", r is not None and r[0] == "no_target", str(r))
+
+    captured: list[str] = []
+    sink = logging.getLogger("astrbot.stub")
+    handler = logging.Handler()
+    handler.emit = lambda record: captured.append(record.getMessage())  # type: ignore[method-assign]
+    sink.addHandler(handler)
+    old_level = sink.level
+    sink.setLevel(logging.DEBUG)
+    try:
+        plugin = make()
+        plugin._log_throttled("k", "[MCWL] 群消息未转发：测试原因")
+        plugin._log_throttled("k", "[MCWL] 群消息未转发：测试原因")
+        C("同一原因 60 秒内只提示一次", captured == ["[MCWL] 群消息未转发：测试原因"], str(captured))
+        plugin._log_throttled("k2", "另一条原因")
+        C("节流不会吞掉别的原因", captured[-1] == "另一条原因", str(captured))
+        plugin._throttle_at.clear()
+        plugin._log_throttled("k", "第三条", interval=0.0)
+        plugin._log_throttled("k", "第四条", interval=0.0)
+        C("interval=0 时每次都提示", captured[-2:] == ["第三条", "第四条"], str(captured))
+        # 未连接时转发必须返回失败标记：调用方据此告警，而不是以为发出去了
+        result = asyncio.run(plugin.manager.broadcast_chat("Steve", "hello"))
+        C("未连接时转发返回失败标记", result == {"生存服": False}, str(result))
+    finally:
+        sink.removeHandler(handler)
+        sink.setLevel(old_level)
+
+
 def main() -> int:
     test_data_manager()
     test_username_and_uuid()
@@ -594,6 +673,7 @@ def main() -> int:
     test_schema_text()
     test_diagnose_units()
     test_plugin_page_and_web_api()
+    test_chat_forward_diagnostics()
     return checker.report("单元测试 test_units")
 
 

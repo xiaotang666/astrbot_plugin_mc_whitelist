@@ -566,12 +566,94 @@ async def scenario_connectivity_test() -> None:
         await mock.stop()
 
 
+async def scenario_chat_forward() -> None:
+    """13. QQ 消息转发到 MC：送达 / 未送达都要有结论。"""
+    dm = DataManager(FakeKV())
+    await seed_bindings(dm)
+
+    def chats() -> list[dict]:
+        return [m for m in mock.received if m["type"] == "chat"]
+
+    mock = MockModServer(aes_key=AES_KEY, token=TOKEN, heartbeat=0.5)
+    await mock.start()
+    manager = make_manager(
+        dm, [{"name": "生存服", "ws_url": mock.ws_url, "http_url": mock.http_url}]
+    )
+    await manager.start()
+    stopped = False
+    try:
+        link = manager.enabled_links()[0]
+        C("先连上（认证完成）", await wait_for(lambda: link.connected and link.authenticated, timeout=10))
+
+        result = await manager.broadcast_chat("Steve", "你好 MC")
+        C("转发成功时返回 True", result == {"生存服": True}, result)
+        C("模组收到 chat 报文", await wait_for(lambda: len(chats()) == 1, timeout=6), len(chats()))
+        if chats():
+            data = chats()[0]["data"]
+            C(
+                "报文字段符合契约（source/sender/content/server）",
+                {"source", "sender", "content", "server"} <= set(data),
+                data,
+            )
+            C("source 必须是 qq", data.get("source") == "qq", data)
+            C("sender/content 原样送达", data.get("sender") == "Steve" and data.get("content") == "你好 MC", data)
+
+        C("空内容不发送", await manager.broadcast_chat("Steve", "   ") == {}, "空内容被发出去了")
+
+        # 关掉该服的「转发群消息」→ 不应发送
+        manager.configure(
+            {
+                "security_mode": "encrypted",
+                "aes_key": AES_KEY,
+                "message_prefix": "[MC]",
+                "default_api_token": TOKEN,
+                "heartbeat_seconds": 1,
+                "heartbeat_timeout_seconds": 3,
+                "mc_servers": [
+                    {
+                        "name": "生存服",
+                        "ws_url": mock.ws_url,
+                        "http_url": mock.http_url,
+                        "chat_sync": False,
+                    }
+                ],
+            }
+        )
+        before = len(chats())
+        C("服务器关了「转发群消息」→ 返回空（没有目标）", await manager.broadcast_chat("Steve", "不该发出去") == {})
+        await asyncio.sleep(0.3)
+        C("模组确实没收到", len(chats()) == before, len(chats()))
+
+        # 断线期间转发：必须返回失败标记，让调用方告警（以前是静默丢弃）
+        manager.configure(
+            {
+                "security_mode": "encrypted",
+                "aes_key": AES_KEY,
+                "message_prefix": "[MC]",
+                "default_api_token": TOKEN,
+                "heartbeat_seconds": 1,
+                "heartbeat_timeout_seconds": 3,
+                "mc_servers": [{"name": "生存服", "ws_url": mock.ws_url, "http_url": mock.http_url}],
+            }
+        )
+        await mock.stop()
+        stopped = True
+        C("模组停掉后链路判离线", await wait_for(lambda: not link.connected, timeout=10), link.last_error)
+        failed = await manager.broadcast_chat("Steve", "断线期间的消息")
+        C("未连接时转发返回失败标记（不假装成功）", failed == {"生存服": False}, failed)
+    finally:
+        await manager.stop()
+        if not stopped:
+            await mock.stop()
+
+
 def main() -> int:
     asyncio.run(scenario_handshake_and_push())
     asyncio.run(scenario_auth_failures())
     asyncio.run(scenario_http_only_and_disabled())
     asyncio.run(scenario_plain_mode())
     asyncio.run(scenario_connectivity_test())
+    asyncio.run(scenario_chat_forward())
     return checker.report("联调测试 test_interop")
 
 
