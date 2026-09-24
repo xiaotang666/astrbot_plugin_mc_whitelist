@@ -613,10 +613,17 @@ def test_chat_forward_diagnostics() -> None:
     r = make(chat_sync_enabled=False)._chat_forward_block(ev())
     C("QQ→MC 广播关闭 → 报因 chat_sync_off", r is not None and r[0] == "chat_sync_off", str(r))
 
+    # 回归锁：真实内核里 is_wake 恒为 True（任何 handler filter 通过都会置真），
+    # 曾用 is_wake_up() 当门禁 → 所有群消息被静默拦下，QQ→MC 彻底失效。
     C(
-        "指令（唤醒）消息静默跳过、不打扰用户",
-        make()._chat_forward_block(ev(wake=True)) == ("wake_up", ""),
+        "is_wake=True（真实内核常态）不构成拦截理由",
+        make()._chat_forward_block(ev(message_str="1")) is None,
+        "又用 is_wake_up() 当门禁了",
     )
+
+    r = make()._chat_forward_block(ev(at_or_wake=True, message_str="/注册 正"))
+    C("发给机器人的消息（唤醒前缀/@）→ 报因 directed", r is not None and r[0] == "directed", str(r))
+    C("该原因也给出文字说明（日志里看得见）", r is not None and "不会" not in r[1] and len(r[1]) > 10, str(r))
 
     r = make(group_list=["12345"])._chat_forward_block(ev(group_id="88888"))
     C("群不在允许列表 → 报因 group_denied", r is not None and r[0] == "group_denied", str(r))
@@ -657,6 +664,43 @@ def test_chat_forward_diagnostics() -> None:
         # 未连接时转发必须返回失败标记：调用方据此告警，而不是以为发出去了
         result = asyncio.run(plugin.manager.broadcast_chat("Steve", "hello"))
         C("未连接时转发返回失败标记", result == {"生存服": False}, str(result))
+
+        # 触发前缀不匹配：以前是静默 return，现在也必须留痕
+        captured.clear()
+        trig = make(chat_forward_trigger="#")
+        asyncio.run(trig.on_group_message(ev(message_str="1")))
+        C(
+            "触发前缀不匹配 → 日志说明原因（不再静默）",
+            any("触发前缀" in m for m in captured),
+            str(captured),
+        )
+        C("触发前缀不匹配时不转发", not any("已转发" in m for m in captured), str(captured))
+        captured.clear()
+        asyncio.run(trig.on_group_message(ev(message_str="# 打到主城去")))
+        C(
+            "匹配触发前缀 → 剥掉前缀后转发（未连接故报失败）",
+            any("未连接" in m for m in captured) and not any("触发前缀" in m for m in captured),
+            str(captured),
+        )
+
+        # 启动自述：一眼看清转发条件
+        s = make()._chat_forward_summary()
+        C("启动自述含触发前缀与目标服务器", "全部消息转发" in s and "生存服" in s, s)
+        C(
+            "配了触发前缀则自述里点明",
+            "「#」" in make(chat_forward_trigger="#")._chat_forward_summary(),
+            make(chat_forward_trigger="#")._chat_forward_summary(),
+        )
+        C(
+            "没有目标服务器时自述提醒",
+            "没有勾选" in make(mc_servers=[{"name": "A", "ws_url": "ws://127.0.0.1:1/ws", "chat_sync": False}])._chat_forward_summary(),
+            make(mc_servers=[{"name": "A", "ws_url": "ws://127.0.0.1:1/ws", "chat_sync": False}])._chat_forward_summary(),
+        )
+        C(
+            "群服互联关闭时自述说明不可用",
+            "不可用" in make(interop_enabled=False)._chat_forward_summary(),
+            make(interop_enabled=False)._chat_forward_summary(),
+        )
     finally:
         sink.removeHandler(handler)
         sink.setLevel(old_level)

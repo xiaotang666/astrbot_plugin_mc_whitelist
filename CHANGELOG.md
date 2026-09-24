@@ -7,6 +7,27 @@
 > 但实际只迭代了几个次版本，现统一改为 `0.x` 系列（`10.5.0` → `0.5.0`）。
 > **历史条目一并换算，相对顺序与规则不变**；内部设计文档（`docs/*_v0.3.md`）仍用自己的文档版本号。
 
+## v0.5.2 (2026-09-25)
+
+**修复：QQ→MC 转发一直不通——门禁判据用错，所有群消息被静默拦下。**
+
+- 根因：处理器用 `event.is_wake_up()` 当门禁。但内核唤醒检查阶段
+  （`waking_check/stage.py:196-214`，docstring 也把「插件 handler filter 通过」列为唤醒条件）
+  只要**任何** handler 的 filter 通过就会把 `event.is_wake` 置为 True；本处理器只挂
+  「群消息」过滤器、对每条群消息都通过 → `is_wake_up()` 恒为 True → 100% 的群消息
+  在这一步 `return` 掉，且不留任何日志。
+- 改用 `is_at_or_wake_command`：仅当消息带唤醒前缀 / @机器人 / 回复机器人才为真，
+  普通聊天消息正常转发。
+- 触发前缀不匹配此前也是静默 `return`，现在同样写日志并给出改法。
+- 启动时新增一条自述：`[MCWL] QQ→MC 转发：广播=开，触发前缀=（空：全部消息转发），目标=主城服`。
+- 新增 `tests/test_e2e_chat_forward.py`（跑在真实内核上，已接入 `run_all --with-kernel`）：
+  ① 用真实内核的唤醒检查阶段证明普通群消息 `is_wake=True`、`is_at_or_wake_command=False`
+  （旧判据必拦、新判据放行）；② 真事件交给真插件、经真 WS 链路打到假模组，断言
+  `chat` 报文按契约送达（`source=qq` / `sender` / `content` / `server`）。
+- 测试替身 `AstrMessageEvent.wake` 默认改为 True（贴合真实内核语义）并补
+  `is_at_or_wake_command`：谁再拿 `is_wake_up()` 当门禁都会被单测抓出来。
+- README 新增「群消息没转发到 MC？」逐条日志对照表。
+
 ## v0.5.1 (2026-09-25)
 
 **修复：QQ → MC 转发失败时静默丢弃——群里没反应、日志里也查不出原因。**

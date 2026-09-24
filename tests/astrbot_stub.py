@@ -259,7 +259,8 @@ class AstrMessageEvent:
         group_id: str = "88888",
         messages: list | None = None,
         message_str: str = "",
-        wake: bool = False,
+        wake: bool = True,
+        at_or_wake: bool = False,
         admin: bool = False,
         platform_id: str = "aiocqhttp",
     ) -> None:
@@ -267,7 +268,13 @@ class AstrMessageEvent:
         self.group_id = group_id
         self.message_str = message_str
         self.messages = messages if messages is not None else [_Plain(message_str)]
+        # 真实内核里 is_wake 的语义很容易踩坑：waking_check 阶段只要**任何** handler 的
+        # filter 通过就会把 event.is_wake 置为 True（stage.py:196-214）。本插件注册了
+        # 「群消息」过滤器，对每条群消息都通过 → is_wake 恒为 True。
+        # 因此这里默认 wake=True（贴合真实内核），谁用 is_wake_up() 当门禁都会被抓出来。
         self._wake = wake
+        # 真正表示「消息是发给机器人的」：唤醒前缀 / @机器人 / 回复机器人
+        self.is_at_or_wake_command = at_or_wake
         self._admin = admin
         self._sender_name = sender_name
         self.session = types.SimpleNamespace(

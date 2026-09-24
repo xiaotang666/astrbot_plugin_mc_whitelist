@@ -166,6 +166,7 @@ class MCWhitelistPlugin(Star):
             )
         else:
             logger.info(f"[MCWL] v{PLUGIN_VERSION} 已启动（群服互联未启用）")
+        logger.info(f"[MCWL] {self._chat_forward_summary()}")
         if _as_bool(self._config.get("auto_cleanup_enabled"), False):
             self._cleanup_task = asyncio.ensure_future(self._cleanup_loop())
 
@@ -931,11 +932,17 @@ class MCWhitelistPlugin(Star):
             return "interop_off", "群服互联未启用（配置页打开「启用群服互联」并重载插件）"
         if not _as_bool(self.cfg("chat_sync_enabled"), True):
             return "chat_sync_off", "「启用 QQ→MC 广播」是关的（配置页打开后保存即可，无需重载）"
-        try:
-            if event.is_wake_up():
-                return "wake_up", ""
-        except Exception:  # noqa: BLE001
-            pass
+        # 注意：**不能用 event.is_wake_up()**。
+        # 内核 waking_check 阶段（stage.py:196-214）只要有任何 handler 的 filter 通过，
+        # 就会把 event.is_wake 置为 True——本处理器只挂了「群消息」过滤器，对每条群消息
+        # 都通过，于是 is_wake_up() 恒为 True，会把所有群消息静默拦下（QQ→MC 就此彻底失效）。
+        # 正确的判据是 is_at_or_wake_command：仅当消息带唤醒前缀、@机器人 或 回复机器人 时为真。
+        if getattr(event, "is_at_or_wake_command", False):
+            return (
+                "directed",
+                "这条消息是发给机器人的（唤醒前缀 / @机器人 / 回复机器人），按设计不转发；"
+                "普通聊天消息才会转发到 MC",
+            )
         group_id = _safe_group_id(event)
         qq = _safe_sender_id(event)
         if not self._group_allowed(group_id, qq):
@@ -949,6 +956,23 @@ class MCWhitelistPlugin(Star):
             )
         return None
 
+    def _chat_forward_summary(self) -> str:
+        """启动时自述 QQ→MC 转发条件，省得靠猜（含触发前缀与目标服务器）。"""
+        cfg = self.live_config()
+        if not _as_bool(cfg.get("interop_enabled"), False):
+            return "QQ→MC 转发：不可用（群服互联未启用）"
+        trigger = str(cfg.get("chat_forward_trigger") or "")
+        targets = [
+            link.name
+            for link in self.manager.links
+            if link.cfg.enabled and link.cfg.chat_sync
+        ]
+        return (
+            f"QQ→MC 转发：广播={'开' if _as_bool(cfg.get('chat_sync_enabled'), True) else '关'}，"
+            f"触发前缀={'（空：全部消息转发）' if not trigger else f'「{trigger}」'}"
+            f"，目标={'、'.join(targets) or '（无：没有勾选「转发群消息」的服务器）'}"
+        )
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
         """群消息转发到 MC（文档 §10.2 + 契约 P1：chat_forward_trigger 触发词）。
@@ -960,7 +984,6 @@ class MCWhitelistPlugin(Star):
         block = self._chat_forward_block(event)
         if block is not None:
             code, reason = block
-            # 指令消息（唤醒词）属正常跳过，不提示；其余原因要让用户看得见
             if reason:
                 self._log_throttled(f"chat-skip:{code}", f"[MCWL] 群消息未转发：{reason}")
             return
@@ -974,7 +997,12 @@ class MCWhitelistPlugin(Star):
         trigger = str(self.cfg("chat_forward_trigger") or "")
         if trigger:
             if not text.startswith(trigger):
-                return  # 触发词不匹配 = 设计如此，不提示
+                self._log_throttled(
+                    "chat-skip:trigger",
+                    f"[MCWL] 群消息未转发：消息不以触发前缀「{trigger}」开头"
+                    "（不需要前缀就把配置项「QQ→MC 触发前缀」留空，保存即可）",
+                )
+                return
             text = text[len(trigger):].strip()
         if not text:
             return

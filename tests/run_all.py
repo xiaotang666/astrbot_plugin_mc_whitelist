@@ -18,6 +18,8 @@ from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
 STUB_SUITES = ("test_units.py", "test_protocol.py", "test_interop.py")
+# 必须跑在真实内核上的两套：前者查注册/schema，后者端到端验证 QQ→MC 真能送达
+KERNEL_SUITES = ("test_real_kernel.py", "test_e2e_chat_forward.py")
 APP_GLOBS = (r"D:/AstrBot_*/backend/app", r"C:/AstrBot_*/backend/app")
 
 
@@ -39,12 +41,13 @@ def main() -> int:
             failed += 1
 
     if "--with-kernel" in sys.argv:
-        print("\n===== test_real_kernel.py =====", flush=True)
         python = _kernel_python()
-        if not python:
-            print("SKIP：未找到 AstrBot 自带的 python.exe（设 ASTRBOT_APP_DIR 可指定）")
-        else:
-            code = subprocess.call([python, str(TESTS_DIR / "test_real_kernel.py")])
+        for suite in KERNEL_SUITES:
+            print(f"\n===== {suite} =====", flush=True)
+            if not python:
+                print("SKIP：未找到 AstrBot 自带的 python.exe（设 ASTRBOT_APP_DIR 可指定）")
+                continue
+            code = subprocess.call([python, str(TESTS_DIR / suite)])
             if code != 0:
                 failed += 1
 
