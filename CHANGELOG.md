@@ -1,6 +1,6 @@
 # 更新日志
 
-> 版本号规则（与模组同步，见 `docs/接口契约冻结_v10.3.md` §5）：
+> 版本号规则（与模组同步）：
 > Bug 修复 / 小更新 `Z+1`；新增功能或字段 `Y+1`（向后兼容）；协议或配置不兼容 `X+1`（双方必须同时升级）。
 
 ## v10.4.1 (2026-09-24)
@@ -51,7 +51,7 @@
 
 ## v10.3.0 (2026-09-24)
 
-**契约冻结版**（依据 `docs/接口契约冻结_v10.3.md`，插件与模组版本号绑定递增）
+**契约冻结版**（插件与模组版本号绑定递增）
 
 - 外层信封统一为 `{type, seq, msg_id, proto_version, encrypted|prefix+data, timestamp}`，明文模式同样套外层。
 - `msg_id`（UUID4）+ LRU 去重落地（容量可配，默认 512）；`proto_version=1` 不一致时拒绝并停止重连。
@@ -68,7 +68,7 @@
 
 ## v10.2.0 (2026-09-24)
 
-**开发起点**（依据 `docs/开发文档_v10.2.md`）
+**开发起点**
 
 - 模块骨架：`data_manager.py`（KV 绑定与唯一性）、`interop/client.py`（每服一条 WS 长连接、认证、指数退避重连、离线补推、并发推送）、`interop/convert.py`（消息格式转换）、`core/protocol.py`（信封与加解密）、`core/crypto.py`（AES-128-ECB）、`services/uuid.py`（Mojang / LittleSkin 查询）、`services/stats_image.py`（Pillow 统计图）、`services/perm.py`（权限降级层）。
 - 指令：注册 / 注销 / 迁移 / 更新昵称 / info / black / sync / status / mc，全部带中文短别名。

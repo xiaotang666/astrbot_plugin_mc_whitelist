@@ -6,7 +6,6 @@ AstrBot 插件 `astrbot_plugin_mc_whitelist` —— 把 Minecraft 服务器和 Q
 
 - 当前版本：**v10.4.1**
 - 内核要求：AstrBot `>=4.16,<5`（本机实测 4.25.2）
-- 协议契约：`docs/接口契约冻结_v10.3.md`（插件 ↔ 模组，**以该文件为准**）
 
 ---
 
@@ -121,45 +120,12 @@ mc_servers:
 
 ## 六、与模组的接口
 
-以 `docs/接口契约冻结_v10.3.md` 为准，摘要：
-
 - 拓扑：**模组 = 服务端**（WS + HTTP），**插件 = 客户端**（主动连、主动推）。
 - WS 地址：`ws://<host>:<ws_port>/ws`；消息类型：`auth` / `auth_result` / `whitelist_update` / `whitelist_ack` / `whitelist_sync_request` / `chat` / `player_event` / `server_status`。
 - HTTP 端点：`GET /v2/mcwhitelist/health`、`GET /v2/mcwhitelist/whitelist`、`POST /v2/mcwhitelist/whitelist/sync`、`GET /v2/mcwhitelist/stats/player?name=`。
 - 统一响应：`{"code":0,"message":"success","data":{...},"timestamp":"..."}`。
 - 白名单条目：`{"name","uuid","source":"MOJANG|LITTLESKIN","qq"}`，每次全量覆盖。
 
-模组侧文档见 `docs/模组开发文档.md`。
-
-## 七、测试
-
-```bash
-# 逻辑自测（替身，任何 Python 3.11+ 可跑；三套共 136 项）
-python tests/test_units.py
-python tests/test_protocol.py
-python tests/test_interop.py       # 起 mock 模组（WS + HTTP）
-
-# 真实内核验证（必须用 AstrBot 自带的解释器）
-"<AstrBot>/backend/python/python.exe" tests/test_real_kernel.py
-```
-
-`tests/test_real_kernel.py` 干的事：走 AstrBot 真实的 `PluginManager._load_plugin_metadata` 读 metadata、
-把插件装进真实 `star_registry` / handler 注册表并核对 10 条指令与全部别名、实例化插件类、
-用 AstrBot 自己的 `validate_config` 校验 `_conf_schema.json` 默认值、检查版本号只写在 `core/version.py`。
-找不到 AstrBot 安装目录时自动 SKIP。脚本会把 `ASTRBOT_ROOT` 指向临时目录，不会在插件目录里生成 `data/`。
-
-## 八、排障
-
-| 现象 | 原因 / 处理 |
-|---|---|
-| 插件装不上，提示「metadata 信息不完整」 | `metadata.yaml` 的 `name/desc/version/author` 必须齐全且不引号包裹 |
-| 改了代码但行为没变 | 没完全重启 AstrBot，或 `__pycache__` 残留 —— 删掉后重启 |
-| 某服一直连不上 | 端口被别的实例占用（同主机必须错开）；或该服没装模组 |
-| 收到消息但被忽略 | 前缀不匹配 / `aes_key` 不一致 / `proto_version` 不一致（看日志哪一条） |
-| `/info` 中文是方块 | 没有可用 CJK 字体，往插件 `fonts/` 放一个字体文件 |
-| `/info` 报「未获取到统计数据」 | 模组统计接口没实现，或该玩家在该服无记录（后者会显示「无数据」） |
-| 传了背景图但图片仍是纯色底 | 图没上传成功（WebUI 会提示）、或配置里的旧路径全失效 —— 看日志 `背景图都不可用` 警告，重新上传即可 |
-
-## 九、版本历史
+## 七、版本历史
 
 见 `CHANGELOG.md`。当前 **v10.4.1**（配置页文案改为短标签 + 副标题说明，修复文字截断）。
