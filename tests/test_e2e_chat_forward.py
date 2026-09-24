@@ -11,12 +11,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_DIR.parent))
 sys.path.insert(0, str(PLUGIN_DIR / "tests"))
+
+# 内核的 root 默认是当前工作目录（astrbot_path.get_astrbot_root()），
+# 不重定向的话导入内核会在**仓库目录**里建 data/（cmd_config.json、data_v4.db、
+# t2i_templates/），这些内核运行时会话文件会被误当成「项目文件」。
+_E2E_ROOT = Path(tempfile.gettempdir()) / "mcwl_e2e_root"
+_E2E_ROOT.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("ASTRBOT_ROOT", str(_E2E_ROOT))
 
 APP = (
     r"D:/AstrBot_4.25.2-custom.20260604.e7d6d49c_windows_amd64_portable/backend/app"
@@ -117,7 +126,8 @@ async def main() -> int:
         "security_mode": "none",
         "interop_enabled": True,
         "chat_sync_enabled": True,
-        "group_mode": "all",
+        "group_mode": "whitelist",
+        "group_list": [GROUP_ID],
         "enable_at_conversion": True,
         "enable_image_forward": True,
         "max_message_length": 256,
@@ -135,16 +145,44 @@ async def main() -> int:
         await asyncio.sleep(0.2)
     print(f"\n② 链路状态：connected={link.connected} authenticated={link.authenticated}")
 
-    # 用真实内核事件调处理器（与内核派发时同一对象）
-    await plugin.on_group_message(event)
-    await asyncio.sleep(0.5)
-    chats = [m for m in mock.received if m["type"] == "chat"]
-    print(f"   假模组收到 chat 报文：{len(chats)} 条 {chats[:1]}")
-    if len(chats) == 1 and chats[0]["data"].get("content") == MESSAGE:
-        print("   ✅ 端到端成功：QQ 群消息已送达 MC 端")
-    else:
-        print("   ❌ 端到端失败：消息没有送达")
+    # 群号识别：真实内核事件上取到的群号必须与内核 API 一致
+    from astrbot_plugin_mc_whitelist.main import _safe_group_id
+
+    seen = _safe_group_id(event)
+    print(f"   群号识别：_safe_group_id={seen} / 内核 get_group_id={event.get_group_id()}")
+    if seen != GROUP_ID:
+        print("   ❌ 群号识别失败，白名单一定匹配不上")
         ok = False
+
+    # 白/黑名单 × 群号正确/写错 —— 矩阵验证「配置里写对了就必须转发」
+    cases = [
+        ("白名单 + 群号正确", {"group_mode": "whitelist", "group_list": [GROUP_ID]}, True),
+        ("白名单 + 整数型群号", {"group_mode": "whitelist", "group_list": [int(GROUP_ID)]}, True),
+        ("白名单 + 群号写错", {"group_mode": "whitelist", "group_list": ["99999999"]}, False),
+        ("黑名单 + 未命中", {"group_mode": "blacklist", "group_list": ["99999999"]}, True),
+        ("黑名单 + 命中", {"group_mode": "blacklist", "group_list": [GROUP_ID]}, False),
+    ]
+    for label, over, expect in cases:
+        plugin._config.update(over)
+
+        def chats() -> list[dict]:
+            return [m for m in mock.received if m["type"] == "chat"]
+
+        before = len(chats())
+        fresh = build_group_event(MESSAGE)  # 每条都用干净事件，避免上一次的状态残留
+        await plugin.on_group_message(fresh)
+        await asyncio.sleep(0.4)
+        got = len(chats()) - before
+        case_ok = got == (1 if expect else 0)
+        ok = ok and case_ok
+        print(f"   {'✅' if case_ok else '❌'} {label}：转发 {got} 条（期望 {1 if expect else 0}）")
+        if not expect:
+            # 被拒时原因必须点名「本插件看到的群号」，否则用户没法自查
+            block = plugin._chat_forward_block(build_group_event(MESSAGE))
+            reason = block[1] if block else ""
+            told = GROUP_ID in reason and "group_list" in reason
+            ok = ok and told
+            print(f"      {'✅' if told else '❌'} 拒绝原因点名群号：{reason}")
 
     await plugin.manager.stop()
     await mock.stop()

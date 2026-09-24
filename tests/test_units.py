@@ -706,6 +706,140 @@ def test_chat_forward_diagnostics() -> None:
         sink.setLevel(old_level)
 
 
+def test_group_id_matching() -> None:
+    """群号识别与白/黑名单比对：类型、空格、全角、取号来源都不能让白名单失效。"""
+    from types import SimpleNamespace
+
+    from astrbot_plugin_mc_whitelist.main import (
+        MCWhitelistPlugin,
+        _safe_group_id,
+        normalize_id,
+    )
+
+    C("归一化：去空格", normalize_id(" 12345 ") == "12345", normalize_id(" 12345 "))
+    C("归一化：全角数字转半角", normalize_id("１２３４５") == "12345", normalize_id("１２３４５"))
+    C("归一化：去掉非数字修饰", normalize_id("群 12345") == "12345", normalize_id("群 12345"))
+    C("归一化：数字型 int 也可比", normalize_id(12345) == "12345", normalize_id(12345))
+    C("归一化：非数字内容原样保留", normalize_id("group-abc") == "group-abc", normalize_id("group-abc"))
+    C("归一化：空值", normalize_id(None) == "" and normalize_id("  ") == "", "空值未归一化为空串")
+
+    base: dict[str, Any] = {
+        "mc_servers": [{"name": "生存服", "ws_url": "ws://127.0.0.1:1/ws", "token": "t"}],
+        "security_mode": "none",
+        "interop_enabled": True,
+    }
+
+    def make(**over: Any) -> Any:
+        cfg = dict(base)
+        cfg.update(over)
+        plugin = MCWhitelistPlugin(astrbot_stub.Context(), cfg)
+        plugin._refresh_links()
+        return plugin
+
+    def ev(**over: Any) -> Any:
+        return astrbot_stub.AstrMessageEvent(**over)
+
+    # 白名单：配置里写 int / 带空格 / 全角，都必须匹配同一个群（否则「配了却不生效」）
+    for cfg_value, label in (
+        ([88888], "整数型群号"),
+        ([" 88888 "], "带空格"),
+        (["８８８８８"], "全角数字"),
+        (["88888"], "字符串"),
+    ):
+        p = make(group_mode="whitelist", group_list=cfg_value)
+        C(
+            f"白名单能匹配：{label}",
+            p._group_allowed("88888", "10001"),
+            f"config={cfg_value}",
+        )
+        C(
+            f"该配置下可转发：{label}",
+            p._chat_forward_block(ev(group_id="88888", message_str="hi")) is None,
+            f"config={cfg_value}",
+        )
+
+    # 白名单未命中 → 拒绝，且原因里要说清「实际看到的群号」和「配置里是什么」
+    p = make(group_mode="whitelist", group_list=["12345"])
+    r = p._chat_forward_block(ev(group_id="88888"))
+    C("白名单未命中 → 报因 group_denied", r is not None and r[0] == "group_denied", str(r))
+    C("拒绝原因含实际看到的群号", r is not None and "88888" in r[1], str(r))
+    C("拒绝原因含当前 group_list", r is not None and "12345" in r[1], str(r))
+    C("拒绝原因给出处置办法", r is not None and "group_list" in r[1], str(r))
+
+    # 黑名单：命中则拒、未命中则放行；空列表 = 全部服务
+    C(
+        "黑名单命中 → 拒绝",
+        not make(group_mode="blacklist", group_list=["88888"])._group_allowed("88888", "1"),
+    )
+    C(
+        "黑名单未命中 → 放行",
+        make(group_mode="blacklist", group_list=["12345"])._group_allowed("88888", "1"),
+    )
+    C(
+        "空列表 = 全部群都服务（白名单）",
+        make(group_mode="whitelist", group_list=[])._group_allowed("88888", "1"),
+    )
+    C(
+        "空列表 = 全部群都服务（黑名单）",
+        make(group_mode="blacklist", group_list=[])._group_allowed("88888", "1"),
+    )
+    C(
+        "取不到群号时白名单拒（不误放行）",
+        not make(group_mode="whitelist", group_list=["12345"])._group_allowed("", "1"),
+    )
+    C(
+        "取不到群号时黑名单放行",
+        make(group_mode="blacklist", group_list=["12345"])._group_allowed("", "1"),
+    )
+
+    # 取号来源兜底：适配器/内核版本填法不同，任一来源能拿到就行
+    class OnlyMessageObj:
+        message_obj = SimpleNamespace(group=SimpleNamespace(group_id="77777"))
+
+    class OnlyFlatAttr:
+        message_obj = SimpleNamespace(group_id="66666")
+
+    class OnlyGroupAttr:
+        group_id = "55555"
+
+    class OnlyUmo:
+        unified_msg_origin = "aiocqhttp:GroupMessage:44444"
+
+    class OnlySession:
+        session_id = "10002_33333"  # unique_session 打开时是 QQ号_群号
+
+    class Nothing:
+        pass
+
+    C(
+        "取号：message_obj.group.group_id",
+        _safe_group_id(OnlyMessageObj()) == "77777",
+        _safe_group_id(OnlyMessageObj()),
+    )
+    C(
+        "取号：message_obj.group_id",
+        _safe_group_id(OnlyFlatAttr()) == "66666",
+        _safe_group_id(OnlyFlatAttr()),
+    )
+    C(
+        "取号：event.group_id",
+        _safe_group_id(OnlyGroupAttr()) == "55555",
+        _safe_group_id(OnlyGroupAttr()),
+    )
+    C("取号：unified_msg_origin 兜底", _safe_group_id(OnlyUmo()) == "44444", _safe_group_id(OnlyUmo()))
+    C(
+        "取号：session_id（unique_session）兜底",
+        _safe_group_id(OnlySession()) == "33333",
+        _safe_group_id(OnlySession()),
+    )
+    C("取号：都没有则空串", _safe_group_id(Nothing()) == "", _safe_group_id(Nothing()))
+
+    # /status 里展示给用户的那行：能直接抄群号去配置
+    st = make(group_mode="whitelist", group_list=["12345"])
+    hint = st._group_mode_hint("88888")
+    C("群号提示可用于 /status 展示", "88888" in hint and "whitelist" in hint, hint)
+
+
 def main() -> int:
     test_data_manager()
     test_username_and_uuid()
@@ -718,6 +852,7 @@ def main() -> int:
     test_diagnose_units()
     test_plugin_page_and_web_api()
     test_chat_forward_diagnostics()
+    test_group_id_matching()
     return checker.report("单元测试 test_units")
 
 

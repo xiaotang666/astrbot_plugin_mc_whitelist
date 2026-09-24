@@ -6,7 +6,7 @@ AstrBot 插件 `astrbot_plugin_mc_whitelist` —— 把 Minecraft 服务器和 Q
 **群昵称即游戏名**做白名单直连绑定，配合每个 MC 服务器上的配套模组（WS 实时推送 + HTTP 全量拉取），
 实现多服白名单同步、双向聊天互通、玩家事件播报、`/info` 统计图片。消息默认 AES-128-ECB 加密 + `[MC]` 前缀校验。
 
-- 当前版本：**v0.5.2**
+- 当前版本：**v0.5.3**
 - 内核要求：AstrBot `>=4.16,<5`（本机实测 4.25.2）
 
 ---
@@ -34,7 +34,7 @@ AstrBot 插件 `astrbot_plugin_mc_whitelist` —— 把 Minecraft 服务器和 Q
 
 1. 把插件目录放进 AstrBot 的插件目录（Windows 默认在 `%USERPROFILE%\.astrbot\data\plugins\`）。
 2. 依赖（AstrBot 自带环境通常已包含）：见 `requirements.txt` —— `aiohttp` / `Pillow` / `cryptography`。
-3. 重启 AstrBot 或在 WebUI 插件页重载，确认日志出现 `[MCWL] v0.5.2 已启动`。
+3. 重启 AstrBot 或在 WebUI 插件页重载，确认日志出现 `[MCWL] v0.5.3 已启动`。
 4. 在 WebUI 插件配置里填 `mc_servers`、`aes_key`、`default_api_token` 等。
 
 > 改完代码务必**完全重启** AstrBot：内存里的旧模块不会自动替换，`__pycache__` 也可能残留。
@@ -97,7 +97,7 @@ mc_servers:
 
 ### 4.3 其它
 
-- `group_mode` / `group_list`：群白/黑名单（空 = 所有群都服务）。
+- `group_mode` / `group_list`：群白/黑名单（空 = 所有群都服务）。群号填**纯数字群号**即可——前后空格、全角数字、整数型都会自动归一化后比对；不知道群号就用 `/status` 看那行「👥 本群：…」，匹配不上时日志也会点名「本插件看到的群号」。
 - `permission_defaults`：各权限节点默认是否对普通成员开放；`permission_enabled=false` 则所有人都能用全部指令。
   群主 / 群管理员自动拥有全部权限节点（不需要配置项）。
 - `chat_forward_trigger`：QQ→MC 转发前缀，**留空 = 群里所有消息都转发**（会刷屏，建议填 `#`）。
@@ -145,6 +145,7 @@ mc_servers:
 | `[MCWL] 群消息未转发：群服互联未启用（配置页打开「启用群服互联」并重载插件）` | 打开开关并**重载插件** |
 | `[MCWL] 群消息未转发：消息不以触发前缀「#」开头` | 配了 `chat_forward_trigger`，群里发消息要以它开头；不要前缀就留空 |
 | `[MCWL] 群消息未转发：这条消息是发给机器人的（唤醒前缀 / @机器人 / 回复机器人）` | 正常跳过，发普通消息即可 |
+| `[MCWL] 群消息未转发：本群不在允许列表：group_mode=whitelist，本插件看到的群号=…，group_list=[…]` | 白名单里没这个群；把日志里的群号加进 `group_list` 保存即可 |
 | `[MCWL] 群消息未转发：没有可转发的服务器` | 服务器条目要「已启用」且勾上「转发群消息」 |
 | `[MCWL] 群消息转发失败（… 未连接，这条消息已丢弃）` | 常驻链路没连上，先按上一节做连通测试 |
 
@@ -174,4 +175,4 @@ mc_servers:
 
 ## 八、版本历史
 
-见 `CHANGELOG.md`。当前 **v0.5.2**（修复 QQ→MC 转发：门禁判据用错导致所有群消息被静默拦下；转发全链路逐项报因）。
+见 `CHANGELOG.md`。当前 **v0.5.3**（修复 QQ→MC 转发门禁判据；修复群白名单匹配不上；群号多来源兜底 + 归一化比对）。

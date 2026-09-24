@@ -322,17 +322,33 @@ class MCWhitelistPlugin(Star):
         return self._uuid_session
 
     def _group_allowed(self, group_id: str | None, qq: str) -> bool:
-        """群访问控制（文档 §14 group_mode / group_list）。"""
+        """群访问控制（文档 §14 group_mode / group_list）。
+
+        比对前两边都归一化：配置里写 `12345`（数字）还是 `"12345 "`（带空格）、
+        全角数字，都应当视为同一个群。以前直接 `in` 原始列表，类型/格式差一点就
+        匹配不上——白名单模式下表现为「消息不转发」，黑名单模式下反而放行，
+        极难排查。
+        """
         mode = str(self.cfg("group_mode", "whitelist") or "whitelist").lower()
-        values = _safe_list(self.cfg("group_list"))
+        values = {normalize_id(v) for v in _safe_list(self.cfg("group_list"))}
+        values.discard("")
         if not values:
             return True
-        gid = str(group_id or "")
+        gid = normalize_id(group_id)
         if not gid:
             return mode != "whitelist"
-        if mode == "blacklist":
-            return gid not in values
-        return gid in values
+        return gid not in values if mode == "blacklist" else gid in values
+
+    def _group_mode_hint(self, group_id: str | None) -> str:
+        """拒绝转发时给一句能照着做的说明，并带上「本插件实际看到的群号」。"""
+        mode = str(self.cfg("group_mode", "whitelist") or "whitelist").lower()
+        configured = _safe_list(self.cfg("group_list"))
+        gid = normalize_id(group_id) or "（未取到群号）"
+        return (
+            f"本群不在允许列表：group_mode={mode}，本插件看到的群号={gid}，"
+            f"group_list={configured or '（空）'}；"
+            "如果这个群号就是本群，把它加进 group_list 并保存即可"
+        )
 
     async def _resolve_username(
         self, event: AstrMessageEvent, explicit_name: str | None = None
@@ -869,6 +885,13 @@ class MCWhitelistPlugin(Star):
                 parts.append(f"错误：{state['last_error']}")
             lines.append(f"{mark} " + " | ".join(parts))
         lines.append("━━━━━━━━━━━━━━━━━━")
+        gid = _safe_group_id(event)
+        if gid:
+            mode = str(self.cfg("group_mode", "whitelist") or "whitelist").lower()
+            group_ok = self._group_allowed(gid, qq)
+            lines.append(
+                f"👥 本群：{gid}（group_mode={mode}，{'✅ 已允许' if group_ok else '⛔ 不允许'}）"
+            )
         lines.append(f"📡 全局绑定：{self.data_manager.binding_count()} 个")
         lines.append(f"🔒 安全模式：{self.manager.security_mode}")
         lines.append(f"🧩 协议版本：{PROTO_VERSION}")
@@ -946,7 +969,7 @@ class MCWhitelistPlugin(Star):
         group_id = _safe_group_id(event)
         qq = _safe_sender_id(event)
         if not self._group_allowed(group_id, qq):
-            return "group_denied", f"群 {group_id} 不在允许范围（group_mode / group_list）"
+            return "group_denied", self._group_mode_hint(group_id)
         if self.data_manager.is_blacklisted(qq):
             return "blacklisted", f"QQ {qq} 在黑名单里"
         if not [link for link in self.manager.enabled_links() if link.cfg.chat_sync]:
@@ -1113,15 +1136,52 @@ def _safe_sender_name(event: AstrMessageEvent) -> str:
     return ""
 
 
+_FULLWIDTH_DIGITS = {ord(c): ord(c) - 0xFEE0 for c in "０１２３４５６７８９"}
+
+
+def normalize_id(value: Any) -> str:
+    """归一化群号 / QQ 号，避免「看着一样却不相等」。
+
+    处理：去首尾空白、全角数字转半角、去掉非数字字符（`"群 12345"` → `"12345"`）。
+    纯非数字内容（例如平台用了带字母的会话 id）原样返回，不做破坏性清洗。
+    """
+    text = str(value if value is not None else "").strip().translate(_FULLWIDTH_DIGITS)
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits or text
+
+
 def _safe_group_id(event: AstrMessageEvent) -> str:
-    fn = getattr(event, "get_group_id", None)
-    if callable(fn):
+    """取当前群号，多来源兜底。
+
+    内核 `AstrMessageEvent.get_group_id()` 读的是 `message_obj.group_id`
+    （该属性又取自 `message_obj.group.group_id`）。不同平台适配器填法不一，
+    加上 `unique_session` 打开时 `session_id` 会变成 `QQ号_群号`，
+    因此这里依次尝试并在最后从 umo / session_id 里兜底解析。
+    """
+    getters = (
+        lambda: event.get_group_id(),
+        lambda: getattr(getattr(event, "message_obj", None), "group", None).group_id,
+        lambda: getattr(event, "message_obj", None).group_id,
+        lambda: getattr(event, "group_id", None),
+    )
+    for getter in getters:
         try:
-            return str(fn() or "").strip()
-        except Exception:  # noqa: BLE001
-            pass
-    value = getattr(event, "group_id", None)
-    return str(value).strip() if value else ""
+            value = str(getter() or "").strip()
+        except Exception:  # noqa: BLE001 - 缺属性/None，继续下一个来源
+            continue
+        if value:
+            return value
+    # 兜底：unified_msg_origin / session_id（aiocqhttp:GroupMessage:88888888）
+    for attr in ("unified_msg_origin", "session_id"):
+        raw = str(getattr(event, attr, "") or "")
+        if not raw:
+            continue
+        tail = raw.split(":")[-1].strip().split("_")[-1].strip()
+        if tail.isdigit():
+            return tail
+    return ""
 
 
 def _extract_target_qq(event: AstrMessageEvent, arg: str = "") -> str | None:
