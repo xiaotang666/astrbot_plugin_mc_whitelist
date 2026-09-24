@@ -4,7 +4,7 @@ AstrBot 插件 `astrbot_plugin_mc_whitelist` —— 把 Minecraft 服务器和 Q
 **群昵称即游戏名**做白名单直连绑定，配合每个 MC 服务器上的配套模组（WS 实时推送 + HTTP 全量拉取），
 实现多服白名单同步、双向聊天互通、玩家事件播报、`/info` 统计图片。消息默认 AES-128-ECB 加密 + `[MC]` 前缀校验。
 
-- 当前版本：**v10.4.0**
+- 当前版本：**v10.4.1**
 - 内核要求：AstrBot `>=4.16,<5`（本机实测 4.25.2）
 - 协议契约：`docs/接口契约冻结_v10.3.md`（插件 ↔ 模组，**以该文件为准**）
 
@@ -32,7 +32,7 @@ AstrBot 插件 `astrbot_plugin_mc_whitelist` —— 把 Minecraft 服务器和 Q
 
 1. 把插件目录放进 AstrBot 的插件目录（本机为 `C:\Users\<用户名>\.astrbot\data\plugins\`）。
 2. 依赖（AstrBot 自带环境通常已包含）：见 `requirements.txt` —— `aiohttp` / `Pillow` / `cryptography`。
-3. 重启 AstrBot 或在 WebUI 插件页重载，确认日志出现 `[MCWL] v10.4.0 已启动`。
+3. 重启 AstrBot 或在 WebUI 插件页重载，确认日志出现 `[MCWL] v10.4.1 已启动`。
 4. 在 WebUI 插件配置里填 `mc_servers`、`aes_key`、`default_api_token` 等。
 
 > 改完代码务必**完全重启** AstrBot：内存里的旧模块不会自动替换，`__pycache__` 也可能残留。
@@ -162,4 +162,4 @@ python tests/test_interop.py       # 起 mock 模组（WS + HTTP）
 
 ## 九、版本历史
 
-见 `CHANGELOG.md`。当前 **v10.4.0**（WebUI 背景图上传/删除 + 移除超管 QQ 列表配置项）。
+见 `CHANGELOG.md`。当前 **v10.4.1**（配置页文案改为短标签 + 副标题说明，修复文字截断）。

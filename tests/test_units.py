@@ -344,6 +344,52 @@ def test_live_config() -> None:
     C("改管理员名单后权限即时生效（不用重载插件）", asyncio.run(scenario()))
 
 
+# ------------------------------------------------------ 配置页文案（WebUI 单行显示）
+def _display_units(text: str) -> int:
+    """估算半角宽度单位：CJK / 全角 = 2，其余 = 1。
+
+    AstrBot 配置页把 description 渲染成**单行标题**（nowrap + 省略号）、hint 渲染成
+    副标题行（默认也只 1 行）。超长就变省略号 —— 用户实测 150% 缩放下约 53 单位就截断，
+    所以这里卡住上限，防止又把长句写回标题。
+    """
+    import unicodedata
+
+    return sum(
+        2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text
+    )
+
+
+def test_schema_text() -> None:
+    import json
+    from pathlib import Path
+
+    schema_path = Path(__file__).resolve().parent.parent / "_conf_schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    def walk(items: dict, prefix: str = "") -> None:
+        for key, item in items.items():
+            if not isinstance(item, dict) or "type" not in item:
+                continue
+            path = f"{prefix}{key}"
+            desc = str(item.get("description") or "")
+            hint = str(item.get("hint") or "")
+            C(f"{path} 有标题且不超一行", bool(desc) and _display_units(desc) <= 30,
+              f"{_display_units(desc)} 单位：{desc}")
+            C(f"{path} 有副标题说明且不超一行", bool(hint) and _display_units(hint) <= 60,
+              f"{_display_units(hint)} 单位：{hint}")
+            C(f"{path} hint 无 HTML 危险字符", "<" not in hint and "&" not in hint, hint)
+            C(f"{path} 标题+键名不超一行",
+              _display_units(f"{desc} ({key})") <= 50,
+              f"{_display_units(f'{desc} ({key})')} 单位：{desc} ({key})")
+            if isinstance(item.get("items"), dict):
+                walk(item["items"], prefix=f"{path}.")
+            for tpl in (item.get("templates") or {}).values():
+                if isinstance(tpl, dict) and isinstance(tpl.get("items"), dict):
+                    walk(tpl["items"], prefix=f"{path}.")
+
+    walk(schema)
+
+
 def main() -> int:
     test_data_manager()
     test_username_and_uuid()
@@ -352,6 +398,7 @@ def main() -> int:
     test_stats_image()
     test_backgrounds()
     test_live_config()
+    test_schema_text()
     return checker.report("单元测试 test_units")
 
 

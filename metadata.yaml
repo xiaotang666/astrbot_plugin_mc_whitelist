@@ -1,7 +1,7 @@
 name: astrbot_plugin_mc_whitelist
 display_name: MC白名单管理系统（多服安全版）
 desc: 昵称直连绑定、多服务器白名单汇聚、AES加密+前缀校验、双向聊天互通、玩家事件播报、统计图片。
-version: 10.4.0
+version: 10.4.1
 author: xiaotang01
 repo: https://github.com/xiaotang666/astrbot_plugin_mc_whitelist
 astrbot_version: ">=4.16,<5"
