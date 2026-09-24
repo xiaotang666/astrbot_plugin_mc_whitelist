@@ -11,6 +11,6 @@
 tests/test_real_kernel.py 会核对 main.PLUGIN_VERSION == metadata.yaml version。
 """
 
-PLUGIN_VERSION = "10.4.1"
+PLUGIN_VERSION = "0.5.0"
 
 __all__ = ["PLUGIN_VERSION"]
