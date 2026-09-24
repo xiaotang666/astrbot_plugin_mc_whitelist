@@ -1,5 +1,7 @@
 # MC白名单管理系统（多服安全版）
 
+![插件图标](assets/logo.png)
+
 AstrBot 插件 `astrbot_plugin_mc_whitelist` —— 把 Minecraft 服务器和 QQ 群接在一起：
 **群昵称即游戏名**做白名单直连绑定，配合每个 MC 服务器上的配套模组（WS 实时推送 + HTTP 全量拉取），
 实现多服白名单同步、双向聊天互通、玩家事件播报、`/info` 统计图片。消息默认 AES-128-ECB 加密 + `[MC]` 前缀校验。

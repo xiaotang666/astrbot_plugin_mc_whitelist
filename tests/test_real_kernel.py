@@ -325,6 +325,33 @@ def main() -> int:
             f"{type(exc).__name__}: {exc}",
         )
 
+    # ------------------------------------------------- 7. 插件图标（dashboard 用）
+    # 内核约定：star_manager 里 logo_fname = "logo.png"，路径 = <插件目录>/logo.png
+    try:
+        kernel_src = (
+            Path(app_dir) / "astrbot" / "core" / "star" / "star_manager.py"
+        ).read_text(encoding="utf-8")
+        matched = re.search(r'logo_fname\s*=\s*"([^"]+)"', kernel_src)
+        check.check("内核里能读到 logo 文件名约定", matched is not None, "")
+        if matched:
+            fname = matched.group(1)
+            logo = PLUGIN_DIR / fname
+            check.equal("插件目录含内核约定的图标文件", fname, "logo.png")
+            check.check(f"图标存在且非空（{fname}）", logo.is_file() and logo.stat().st_size > 0, "")
+            try:
+                from PIL import Image
+
+                with Image.open(logo) as img:
+                    check.check(
+                        "图标是有效方形 PNG（可被 Pillow 解析）",
+                        img.format == "PNG" and img.size[0] == img.size[1] >= 128,
+                        f"{img.format} {img.size}",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                check.check("图标是有效方形 PNG（可被 Pillow 解析）", False, f"{type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        check.check("内核里能读到 logo 文件名约定", False, f"{type(exc).__name__}: {exc}")
+
     return check.report("真实内核：加载与注册")
 
 
